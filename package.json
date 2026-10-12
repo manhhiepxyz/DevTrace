@@ -1,0 +1,25 @@
+{
+  "name": "devtrace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DevTrace — AI Coding Activity Tracker. Thu thập bằng chứng hoạt động lập trình từ nhiều nguồn rồi mới suy luận.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tools/smoke-test.js",
+    "app": "node desktop/launch.js",
+    "desktop": "electron desktop/main.js",
+    "stop": "node desktop/stop.js",
+    "icon": "node desktop/make-icon.js",
+    "repos": "node tools/find-repos.js",
+    "shortcut": "node desktop/shortcut.js install",
+    "collect": "node -e \"const C=require('./app/config');const S=require('./app/collect').run(C.load());console.log('Đã thu '+S.total+' sự kiện trong '+S.ms+'ms');for(const n of Object.keys(S.sources))console.log('  '+n.padEnd(8)+S.sources[n].events+' sự kiện  '+S.sources[n].notes.join(' | '));\"",
+    "collect:rebuild": "node -e \"const C=require('./app/config');const S=require('./app/collect').run(C.load(),{rebuild:true});console.log('Đã dựng lại: '+S.total+' sự kiện trong '+S.ms+'ms');\""
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  }
+}

@@ -1,0 +1,31 @@
+# Dữ liệu của huynh — KHÔNG BAO GIỜ đẩy lên.
+#
+# `data/` chứa bằng chứng thô (data/events/*.jsonl), nhật ký, kho kế hoạch, ảnh
+# chụp hộp thư, và cả `data/browser-profile/` — một hồ sơ Chrome đầy đủ. Đây là
+# thứ riêng tư nhất trên máy, và đẩy nó lên là việc không rút lại được: một khi
+# đã nằm trong lịch sử git thì xoá tệp không xoá được khỏi lịch sử đó.
+data/
+
+# Cấu hình riêng: chứa đường dẫn tuyệt đối của máy huynh, danh sách kho git, và
+# tên/địa chỉ tác giả. Dùng devtrace.config.example.json làm mẫu.
+devtrace.config.json
+
+# Thư viện cài từ mạng, dựng lại được bằng `npm install`.
+node_modules/
+
+# Máy chủ đang chạy: nhật ký, số pid, và nhật ký của bộ khởi động.
+desktop/.launch-out.log
+
+# Nói chung: nhật ký và tệp pid thì không bao giờ là mã nguồn.
+*.log
+*.pid
+
+# Bản sao của tệp kế hoạch hỏng (do DevTrace tự giữ). Nằm trong data/ nên đã
+# được che ở trên; nhắc lại ở đây để nếu ai đổi dataDir ra chỗ khác thì vẫn nhớ.
+*.hong-*
+
+# Hệ điều hành và trình soạn thảo.
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

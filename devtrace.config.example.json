@@ -1,0 +1,107 @@
+{
+  "version": 1,
+
+  "_ghi_chu": [
+    "Đây là bản MẪU, không phải bản DevTrace đang chạy. Bản thật là devtrace.config.json,",
+    "do DevTrace tự sinh ở lần chạy đầu và KHÔNG được đẩy lên git (xem .gitignore).",
+    "Sao chép tệp này thành devtrace.config.json rồi sửa đường dẫn cho khớp máy của huynh.",
+    "Mọi khoá đều có giá trị mặc định trong app/config.js — thiếu khoá nào thì khoá đó",
+    "rơi về mặc định, nên tệp này chỉ cần giữ những gì huynh thật sự muốn đổi."
+  ],
+
+  "dayStartHour": 4,
+  "dataDir": "./data",
+
+  "sources": {
+    "codex": {
+      "enabled": true,
+      "root": "~/.codex/sessions",
+      "maxFiles": 600
+    },
+    "git": {
+      "enabled": true,
+      "repos": [],
+      "authors": [],
+      "autoDiscover": {
+        "enabled": false,
+        "roots": [],
+        "maxDepth": 3,
+        "maxRepos": 40
+      },
+      "healthMaxRepos": 20,
+      "secretScan": false
+    },
+    "files": {
+      "enabled": true,
+      "dirs": [],
+      "maxDepth": 4
+    },
+    "browser": {
+      "enabled": true,
+      "browsers": ["chrome", "edge"],
+      "keepDays": 30
+    },
+    "shell": {
+      "enabled": true,
+      "maxCommands": 4000
+    },
+    "vscode": {
+      "enabled": true
+    },
+    "window": {
+      "enabled": false
+    },
+    "github": {
+      "enabled": false,
+      "user": "",
+      "tokenEnv": "DEVTRACE_GITHUB_TOKEN",
+      "apiBase": "https://api.github.com",
+      "maxItems": 100
+    }
+  },
+
+  "declaredProjects": [],
+
+  "sprint": {
+    "lengthDays": 14
+  },
+
+  "mail": {
+    "enabled": false,
+    "host": "",
+    "port": 993,
+    "user": "",
+    "passwordEnv": "DEVTRACE_MAIL_PASSWORD",
+    "folder": "INBOX",
+    "sentFolder": "Sent",
+    "unansweredHours": 24,
+    "maxMessages": 200
+  },
+
+  "desktop": {
+    "port": 5173,
+    "openBrowser": true,
+    "separateProfile": true,
+    "collectOnLaunch": true,
+    "windowSize": "1360,900",
+    "waitMs": 25000
+  },
+
+  "ai": {
+    "provider": "none",
+    "baseUrl": "",
+    "model": "",
+    "apiKeyEnv": "DEVTRACE_API_KEY",
+    "language": "vi"
+  },
+
+  "privacy": {
+    "redactSecrets": true
+  },
+
+  "retention": {
+    "enabled": false,
+    "days": 365,
+    "keepJournals": true
+  }
+}

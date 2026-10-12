@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tu Luyện Ký · Nhật ký học tập</title>
+<meta name="description" content="Web quản lý, theo dõi và đánh giá quá trình học lập trình: nhật ký tu luyện, lộ trình cảnh giới, theo dõi việc đọc và quản lý nhóm theo Scrum.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%239e2b1e'/%3E%3Ctext x='16' y='24' font-size='19' text-anchor='middle' fill='%23fdf6e6'%3E%E7%B7%B4%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="giay">
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">練</div>
+      <div class="brand-text">
+        <strong>Tu Luyện Ký</strong>
+        <span>Nhật ký học tập</span>
+      </div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Điều hướng chính"></nav>
+    <div class="sidebar-foot">
+      <div class="streak-chip" id="streakChip"></div>
+      <p class="muted small">Dữ liệu lưu ngay trên máy huynh. Nhớ <b>Xuất dữ liệu</b> định kỳ để sao lưu.</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" data-action="toggle-nav" aria-label="Mở menu">☰</button>
+      <div class="topbar-title">
+        <h1 id="viewTitle">Hôm nay</h1>
+        <p id="viewSubtitle" class="muted"></p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" data-action="new-session">Ghi buổi học</button>
+      </div>
+    </header>
+
+    <div id="view" class="view"></div>
+  </main>
+</div>
+
+<div class="modal-root" id="modalRoot" hidden></div>
+<div class="toast-root" id="toastRoot" aria-live="polite"></div>
+
+<script src="js/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/timer.js"></script>
+<script src="js/views.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

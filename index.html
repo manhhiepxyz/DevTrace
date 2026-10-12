@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevTrace · Nhật ký hoạt động lập trình</title>
+<meta name="description" content="DevTrace thu thập bằng chứng hoạt động lập trình từ Codex, git, trình duyệt, terminal và trình soạn thảo, rồi đối chiếu với kết quả tạo ra.">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23140f0c'/%3E%3Cpath d='M6 22 L12 10 L16 19 L20 13 L26 22' stroke='%23c8543c' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<!-- Bảng màu viết sẵn ở đây là giá trị trước khi app.js kịp chạy. Để 'trang'
+     cho khớp mặc định mới, nếu không thì mỗi lần tải trang sẽ nháy một cái
+     nền tối rồi mới sáng ra. -->
+<body data-theme="trang">
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">跡</div>
+      <div class="brand-text">
+        <strong>DevTrace</strong>
+        <span>Dấu vết lập trình</span>
+      </div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Điều hướng chính"></nav>
+    <div class="sidebar-foot">
+      <div class="chip-row" id="statusChips"></div>
+      <button class="btn btn-ghost btn-block" data-action="collect" id="collectBtn">Thu thập dấu vết</button>
+      <p class="muted tiny">Dữ liệu nằm trên máy huynh, trong thư mục <code>data/</code>. Không gửi đi đâu nếu huynh không bật AI.</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" data-action="toggle-nav" aria-label="Mở menu">☰</button>
+      <div class="topbar-title">
+        <h1 id="viewTitle">Hôm nay</h1>
+        <p id="viewSubtitle" class="muted"></p>
+      </div>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </header>
+
+    <div id="view" class="view"><div class="loading">Đang đọc dấu vết…</div></div>
+  </main>
+</div>
+
+<div class="modal-root" id="modalRoot" hidden></div>
+<div class="toast-root" id="toastRoot" aria-live="polite"></div>
+
+<script src="web/charts.js"></script>
+<script src="web/views.js"></script>
+<script src="web/app.js"></script>
+</body>
+</html>
