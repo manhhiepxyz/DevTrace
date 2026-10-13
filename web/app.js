@@ -117,7 +117,10 @@
         api('/api/status'),
         api('/api/day/' + state.day),
         api('/api/day/' + state.day + '/journal'),
-        api('/api/plans?day=' + state.day),
+        /* `week=1` là phần THÊM của chính tuyến này, không phải tuyến riêng —
+           xem chú thích ở server.js. Chỉ màn Hôm nay hỏi, vì chỉ nó hiện
+           bảng tuần; màn Dự án gọi cùng tuyến mà không kèm cờ. */
+        api('/api/plans?day=' + state.day + '&week=1'),
         api('/api/repohealth'),
         api('/api/mail')
       ]).then(function (out) {
@@ -385,6 +388,13 @@
     return node ? String(node.value == null ? '' : node.value) : '';
   }
 
+  // Ô tích chưa dựng ra (form đang sửa một buổi) thì trả về false, không phải
+  // undefined — nếu không thì `[undefined]` lọt xuống máy chủ như một thứ hợp lệ.
+  function checked(id) {
+    var node = $('#' + id);
+    return !!(node && node.checked);
+  }
+
   function fieldHtml(label, inner, hint) {
     return '<div class="field"><label>' + label + '</label>' + inner +
       (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div>';
@@ -466,13 +476,47 @@
 
   /* --- Biểu mẫu buổi --- */
 
-  function openSlotEditor(slot) {
+  /* Mục tiêu dài hạn để gắn vào một buổi. Chỉ `horizon === 'goal'`: việc
+     trong ngày gắn vào buổi thì vẫn hợp lệ, nhưng cột Target của bảng tuần
+     chỉ có nghĩa khi nó trỏ tới một mục tiêu. */
+  function goalOptionsHtml(selectedId) {
+    var goals = planTasks().filter(function (t) { return t && t.horizon === 'goal'; });
+    var html = '<option value="">(không gắn mục tiêu)</option>';
+    goals.forEach(function (t) {
+      html += '<option value="' + esc(t.id) + '"' + (t.id === selectedId ? ' selected' : '') + '>' +
+        esc(t.title) + '</option>';
+    });
+    return html;
+  }
+
+  /* `prefill` đến từ ô trống của bảng tuần: nó biết đúng thứ và đúng khung
+     giờ của chính nó, nên mở form ra là điền sẵn — không bắt chọn lại. */
+  function openSlotEditor(slot, prefill) {
     var editing = !!slot;
+    var seed = slot || prefill || {};
+    var weekdays = [1, 2, 3, 4, 5, 6, 7];
+
+    /* Sửa một buổi thì vẫn là "buổi này thuộc thứ nào". Tạo mới từ bảng thì
+       phải tích được nhiều thứ: cùng một khung giờ mà lặp năm ngày là việc
+       thường, và bắt làm năm lần là bắt huynh làm việc của máy. */
+    var dayField = editing
+      ? fieldHtml('Thứ', '<select id="slotWeekday">' + optionsHtml(WEEKDAY_OPTS, Number(seed.weekday) || 1) + '</select>')
+      : fieldHtml('Lặp vào các thứ',
+        '<div class="slot-days">' + weekdays.map(function (w) {
+          var on = Number(seed.weekday) === w;
+          return '<label class="slot-day"><input type="checkbox" id="slotDay' + w + '"' + (on ? ' checked' : '') + '>' +
+            '<span>' + esc(WEEKDAY_OPTS[w - 1][1]) + '</span></label>';
+        }).join('') + '</div>',
+        'Tích nhiều thứ để tạo cùng lúc. Một thứ vướng giờ với buổi đã có thì DevTrace từ chối cả lượt — ' +
+        'không tạo nửa vời.');
+
     var body =
-      fieldHtml('Thứ', '<select id="slotWeekday">' + optionsHtml(WEEKDAY_OPTS, slot ? Number(slot.weekday) : 1) + '</select>') +
-      fieldHtml('Bắt đầu', '<input id="slotStart" value="' + esc(slot ? slot.start : '09:00') + '" placeholder="09:00">') +
-      fieldHtml('Kết thúc', '<input id="slotEnd" value="' + esc(slot ? slot.end : '11:00') + '" placeholder="11:00">') +
+      dayField +
+      fieldHtml('Bắt đầu', '<input id="slotStart" value="' + esc(seed.start || '09:00') + '" placeholder="09:00">') +
+      fieldHtml('Kết thúc', '<input id="slotEnd" value="' + esc(seed.end || '11:00') + '" placeholder="11:00">') +
       fieldHtml('Buổi này để làm gì', '<input id="slotTitle" value="' + esc(slot ? slot.title : '') + '" placeholder="Làm dự án Nexus">') +
+      fieldHtml('Mục tiêu', '<select id="slotGoal">' + goalOptionsHtml(slot ? slot.taskId : '') + '</select>',
+        'Đây là thứ hiện ở cột trái của bảng tuần. Để trống thì hàng đó ghi “chưa gắn mục tiêu”.') +
       fieldHtml('Loại', '<select id="slotKind">' + optionsHtml(KIND_TEXT, slot ? slot.kind : 'deep') + '</select>',
         'Việc sâu và hành chính tô màu khác nhau, để nhìn một dải là biết ngày đó nặng hay nhẹ.') +
       fieldHtml('Dự án', '<select id="slotProject">' + projectOptionsHtml(slot ? slot.projectPath : '') + '</select>');
@@ -804,23 +848,70 @@
 
     /* ---- Thời khoá biểu ---- */
 
-    'slot-form': function (value) { openSlotEditor(slotById(value)); },
+    /* Ô trống của bảng tuần gửi `new:<thứ>:<bắt đầu>:<kết thúc>` — nó biết
+       đúng ô của mình, nên form mở ra đã điền sẵn thứ và khung giờ. */
+    'slot-form': function (value) {
+      var raw = String(value || '');
+      if (raw.indexOf('new:') === 0) {
+        var bits = raw.slice(4).split(':');
+        return openSlotEditor(null, {
+          weekday: Number(bits[0]) || 1,
+          start: (bits[1] || '') + ':' + (bits[2] || ''),
+          end: (bits[3] || '') + ':' + (bits[4] || '')
+        });
+      }
+      openSlotEditor(slotById(raw));
+    },
     'slot-save': function (value) {
       var project = projectByPath(val('slotProject'));
-      postPlan('/api/plans/slot', {
+      var body = {
         action: 'save',
         id: value || null,
-        weekday: Number(val('slotWeekday')) || 1,
         start: val('slotStart'),
         end: val('slotEnd'),
         title: val('slotTitle'),
+        taskId: val('slotGoal') || null,
         kind: val('slotKind') || 'deep',
         projectId: project ? project.id : null,
         projectPath: project ? project.path : null
-      }).then(function (out) {
+      };
+      if (value) {
+        body.weekday = Number(val('slotWeekday')) || 1;
+      } else {
+        /* Tạo mới: gửi danh sách thứ đã tích. Gửi rỗng thì máy chủ từ chối —
+           và đó là điều đúng: một buổi không thuộc thứ nào thì không có chỗ
+           nào trong bảng tuần để hiện. */
+        var picked = [1, 2, 3, 4, 5, 6, 7].filter(function (w) { return checked('slotDay' + w); });
+        if (!picked.length) { toast('Chọn ít nhất một thứ cho buổi này.', 'bad'); return; }
+        body.weekdays = picked;
+      }
+      postPlan('/api/plans/slot', body).then(function (out) {
         if (!out) return;
         closeModal();
-        toast('Đã lưu buổi.', 'good');
+        var made = (out.created || []).length;
+        toast(made > 1 ? 'Đã tạo ' + made + ' buổi.' : 'Đã lưu buổi.', 'good');
+      });
+    },
+
+    /* ---- Nguyên tắc của tuần ----
+
+       Một câu dùng chung cho cả tuần, không phải bảy ô giống nhau: nó là ghi
+       chú, không phải việc. Sửa ở hộp thoại chứ không sửa tại chỗ, để câu
+       chữ chỉ được ghi xuống khi huynh bấm Lưu. */
+    'timetable-note': function () {
+      var part = plansData();
+      openModal('Nguyên tắc của tuần',
+        '<p class="card-sub">Một câu huynh tự đặt cho cả tuần — ví dụ “ăn xong nghỉ 20 phút rồi vào học luôn”. ' +
+        'Nó hiện ở hàng cuối bảng tuần và không được dùng vào việc đối chiếu.</p>' +
+        fieldHtml('Nguyên tắc', '<input id="timetableNote" value="' + esc((part && part.principle) || '') + '" ' +
+          'placeholder="Ăn xong nghỉ 20 phút rồi vào học luôn.">'),
+        '<button class="btn btn-primary" data-action="timetable-note-save">Lưu</button>');
+    },
+    'timetable-note-save': function () {
+      postPlan('/api/plans/slot', { action: 'note', text: val('timetableNote') }).then(function (out) {
+        if (!out) return;
+        closeModal();
+        toast('Đã lưu nguyên tắc.', 'good');
       });
     },
     'slot-delete': function (value) {

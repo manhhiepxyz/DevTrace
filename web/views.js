@@ -234,56 +234,260 @@
       (s.projectName ? '<div class="tiny muted">Dự án: ' + esc(s.projectName) + '</div>' : '');
   }
 
-  function slotChip(ctx, s) {
+  /* --- Bảng tuần ------------------------------------------------------
+
+     Bố cục lấy từ chính thời khoá biểu huynh đang dùng trên giấy: cột trái
+     là mục tiêu dài hạn, bảy cột là bảy thứ, mỗi hàng là MỘT khung giờ, và
+     hàng cuối là "Nguyên tắc".
+
+     Một chỗ CỐ Ý khác tấm ảnh: màu trong ô là KẾT QUẢ ĐỐI CHIẾU, không
+     phải màu mục tiêu. Màu mục tiêu chỉ nằm ở cột trái. Nếu một ô vừa mang
+     màu mục tiêu vừa mang màu trạng thái thì người đọc sẽ tưởng ô xanh là
+     "đã làm" — mà đó đúng là thứ DevTrace không được phép nói sai. */
+
+  var WEEK_COLUMNS = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+
+  function clockMinutes(value) {
+    var parts = String(value == null ? '' : value).split(':');
+    var h = Number(parts[0]);
+    var m = Number(parts[1]);
+    if (!isFinite(h) || !isFinite(m)) return 0;
+    return h * 60 + m;
+  }
+
+  /* Dịch ngày thuần bằng chuỗi, không kéo múi giờ vào: chuỗi 'YYYY-MM-DD'
+     đọc qua `new Date(chuỗi)` là UTC, còn `new Date(y, m, d)` là giờ máy —
+     trộn hai lối đó là lệch một ngày ở nửa đêm. */
+  function shiftDay(day, delta) {
+    var parts = String(day || '').split('-');
+    if (parts.length !== 3) return null;
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    if (isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() + delta);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function dayShort(day) {
+    var parts = String(day || '').split('-');
+    return parts.length === 3 ? parts[2] + '/' + parts[1] : String(day || '');
+  }
+
+  /* Sáng / chiều / tối chỉ là NHÃN ĐỌC cho nhanh, không phải một trường dữ
+     liệu. Mốc 12:00 và 18:00 lấy theo đúng ba khung trong ảnh; buổi nào lệch
+     mốc thì vẫn nằm nguyên ở hàng của nó, chỉ khác chữ bên cạnh. */
+  function periodLabel(start) {
+    var minutes = clockMinutes(start);
+    if (minutes < 12 * 60) return 'Sáng';
+    if (minutes < 18 * 60) return 'Chiều';
+    return 'Tối';
+  }
+
+  /* Màu mục tiêu là TRANG TRÍ để mắt tách hàng, không phải một bảng mã: năm
+     màu cho bao nhiêu mục tiêu cũng được, nên hai mục tiêu khác nhau hoàn
+     toàn có thể trùng màu. Băm ở đây chỉ cần ổn định qua các lần tải. */
+  function goalClass(id) {
+    var h = 0;
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return 'slot-goal-' + (h % 5 + 1);
+  }
+
+  /* Một buổi, trong ô của bảng. Không lặp lại giờ ở đây: giờ đã nằm ở đầu
+     hàng, nhắc lại bảy lần chỉ tổ rối mắt. */
+  function slotButton(ctx, s) {
+    if (!s.status) {
+      /* Máy chủ chưa trả kết quả đối chiếu cho tuần này. KHÔNG mượn
+         `slot-unknown`: chữ đó có nghĩa khác hẳn — "cả ngày không đọc được
+         dấu vết nào" — và mượn nó là nói sai về dữ liệu của huynh. */
+      return '<span class="slot slot-pending">' +
+        '<span class="slot-title">' + esc(s.title) + '</span>' +
+        '<span class="slot-state">chưa đối chiếu</span>' +
+        '</span>';
+    }
     var key = 'slot-' + s.id;
     var open = isOpen(ctx, key);
     var cls = SLOT_CLASS[s.status] || 'slot-unknown';
-    return '<div class="slot-wrap">' +
-      '<button class="slot ' + cls + '" type="button" data-action="toggle-detail" data-value="' + esc(key) + '" ' +
+    return '<button class="slot ' + cls + '" type="button" data-action="toggle-detail" data-value="' + esc(key) + '" ' +
       'aria-expanded="' + (open ? 'true' : 'false') + '">' +
-      '<span class="slot-time">' + esc(s.start) + '–' + esc(s.end) + '</span>' +
       '<span class="slot-title">' + esc(s.title) + '</span>' +
       '<span class="slot-state">' + esc(SLOT_LABEL[s.status] || s.status) + '</span>' +
       (s.kind && s.kind !== 'deep' ? '<span class="slot-kind">' + esc(KIND_LABEL[s.kind] || s.kind) + '</span>' : '') +
-      '</button>' +
-      (open
-        ? '<div class="slot-detail">' + slotDetailHtml(s) +
-          '<div class="row-actions mt">' +
-          '<button class="btn btn-sm" data-action="slot-form" data-value="' + esc(s.id) + '">Sửa buổi</button>' +
-          '<button class="btn btn-sm" data-action="slot-delete" data-value="' + esc(s.id) + '">Xoá buổi</button>' +
-          '</div></div>'
-        : '') +
-      '</div>';
+      '</button>';
+  }
+
+  /* Gom buổi thành HÀNG theo ĐÚNG cặp giờ. Hai buổi 09:00–11:00 và
+     09:05–11:00 thành hai hàng riêng: giấu chuyện đó đi là nói dối về thời
+     khoá biểu của chính huynh. */
+  function weekRows(week, template) {
+    var rows = [];
+    var byKey = {};
+    function add(weekday, s) {
+      var key = s.start + '–' + s.end;
+      if (!byKey[key]) {
+        byKey[key] = { start: s.start, end: s.end, cells: {} };
+        rows.push(byKey[key]);
+      }
+      if (!byKey[key].cells[weekday]) byKey[key].cells[weekday] = [];
+      byKey[key].cells[weekday].push(s);
+    }
+    if (week) {
+      week.days.forEach(function (d) { d.sessions.forEach(function (s) { add(s.weekday, s); }); });
+    } else {
+      (template || []).forEach(function (s) { add(s.weekday, s); });
+    }
+    rows.sort(function (a, b) {
+      return (clockMinutes(a.start) - clockMinutes(b.start)) || (clockMinutes(a.end) - clockMinutes(b.end));
+    });
+    return rows;
+  }
+
+  /* Cột Target của một hàng. Hàng mà các thứ gắn mục tiêu KHÁC NHAU thì
+     không tô màu: in thẳng ra là khác nhau, thay vì chọn bừa một cái rồi để
+     hàng đó nói dối về sáu thứ còn lại. */
+  function rowGoal(row) {
+    var ids = [];
+    Object.keys(row.cells).forEach(function (weekday) {
+      row.cells[weekday].forEach(function (s) {
+        if (s.goalId && ids.indexOf(s.goalId) === -1) ids.push(s.goalId);
+      });
+    });
+    if (!ids.length) return { cls: 'slot-goal-none', label: 'chưa gắn mục tiêu' };
+    if (ids.length > 1) return { cls: 'slot-goal-many', label: 'mục tiêu khác nhau giữa các thứ' };
+    var title = null;
+    Object.keys(row.cells).forEach(function (weekday) {
+      row.cells[weekday].forEach(function (s) {
+        if (!title && s.goalId === ids[0] && s.goalTitle) title = s.goalTitle;
+      });
+    });
+    return { cls: goalClass(ids[0]), label: title || '(mục tiêu chưa đặt tên)' };
+  }
+
+  function detailOpenHtml(s, row) {
+    return '<div class="slot-detail-open">' +
+      '<div class="slot-detail-head">' + esc(WEEK_COLUMNS[s.weekday - 1] || '') + ' · ' +
+      esc(row.start) + '–' + esc(row.end) + ' · <b>' + esc(s.title) + '</b></div>' +
+      slotDetailHtml(s) +
+      '<div class="row-actions mt">' +
+      '<button class="btn btn-sm" data-action="slot-form" data-value="' + esc(s.id) + '">Sửa buổi</button>' +
+      '<button class="btn btn-sm" data-action="slot-delete" data-value="' + esc(s.id) + '">Xoá buổi</button>' +
+      '</div></div>';
+  }
+
+  function weekTableHtml(ctx, week, template) {
+    var plans = ctx.data.plans || {};
+    var rows = weekRows(week, template);
+    var start = (week && week.weekStart) || plans.weekStart || plans.day || null;
+
+    var columns = [];
+    for (var i = 0; i < 7; i++) {
+      var d = (week && week.days && week.days[i]) || null;
+      columns.push({
+        weekday: i + 1,
+        label: WEEK_COLUMNS[i],
+        day: (d && d.day) || (start ? shiftDay(start, i) : null),
+        isViewed: !!(d && d.isViewed) || (!d && !!plans.day && shiftDay(start, i) === plans.day),
+        upcoming: !!(d && d.upcoming)
+      });
+    }
+
+    var html = ['<div class="timetable-wrap"><table class="timetable"><thead><tr>' +
+      '<th class="slot-head">Khung giờ</th>'];
+    columns.forEach(function (c) {
+      html.push('<th class="slot-col' + (c.isViewed ? ' slot-today' : '') + '">' + esc(c.label) +
+        (c.day ? '<span class="slot-date">' + esc(dayShort(c.day)) + '</span>' : '') +
+        (c.upcoming ? '<span class="slot-upcoming">chưa tới</span>' : '') +
+        '</th>');
+    });
+    html.push('</tr></thead><tbody>');
+
+    rows.forEach(function (row) {
+      var goal = rowGoal(row);
+      html.push('<tr><th class="slot-head slot-head-time">' +
+        '<span class="slot-time">' + esc(row.start) + '–' + esc(row.end) + '</span>' +
+        '<span class="slot-period">' + esc(periodLabel(row.start)) + '</span>' +
+        '<span class="slot-target ' + goal.cls + '">' + esc(goal.label) + '</span>' +
+        '</th>');
+      columns.forEach(function (c) {
+        var list = row.cells[c.weekday] || [];
+        html.push('<td class="slot-cell' + (c.isViewed ? ' slot-today' : '') + '">');
+        if (list.length) {
+          html.push(list.map(function (s) { return slotButton(ctx, s); }).join(''));
+        } else {
+          /* Ô trống vẫn phải bấm được: nó mang sẵn đúng thứ và đúng khung
+             giờ của chính nó, nên mở form ra là điền sẵn — không phải chọn
+             lại từ đầu. */
+          html.push('<button class="slot-empty" type="button" data-action="slot-form" ' +
+            'data-value="' + esc('new:' + c.weekday + ':' + row.start + ':' + row.end) + '" ' +
+            'title="Thêm buổi vào ô này">+</button>');
+        }
+        html.push('</td>');
+      });
+      html.push('</tr>');
+
+      /* Dòng đối chiếu nằm NGAY DƯỚI hàng của nó: câu hỏi "buổi này lệch ở
+         đâu" phải trả lời được mà không che mất phần còn lại của tuần. */
+      var open = [];
+      columns.forEach(function (c) {
+        (row.cells[c.weekday] || []).forEach(function (s) {
+          if (s.status && isOpen(ctx, 'slot-' + s.id)) open.push(s);
+        });
+      });
+      if (open.length) {
+        html.push('<tr class="slot-detail-row"><td colspan="' + (columns.length + 1) + '">' +
+          open.map(function (s) { return detailOpenHtml(s, row); }).join('') + '</td></tr>');
+      }
+    });
+
+    var principle = (week && week.principle) || plans.principle || '';
+    html.push('<tr class="slot-principle-row"><th class="slot-head">Nguyên tắc</th>' +
+      '<td colspan="' + columns.length + '">' +
+      (principle
+        ? '<span class="slot-principle-text">' + esc(principle) + '</span>'
+        : '<span class="muted">Chưa đặt nguyên tắc cho tuần này.</span>') +
+      '<button class="btn btn-sm" data-action="timetable-note">Sửa nguyên tắc</button>' +
+      '</td></tr>');
+
+    html.push('</tbody></table></div>');
+    return { html: html.join(''), rows: rows.length, pending: !week };
   }
 
   function timetableHtml(ctx) {
+    var plans = ctx.data.plans || {};
+    var week = plans.week || null;
+    var template = plans.timetable || [];
     var schedule = (ctx.data.digest && ctx.data.digest.schedule) || null;
-    var sessions = (schedule && schedule.sessions) || [];
-    var template = (ctx.data.plans && ctx.data.plans.timetable) || [];
 
-    var body;
-    if (sessions.length) {
-      body = '<div class="timetable">' + sessions.map(function (s) { return slotChip(ctx, s); }).join('') + '</div>' +
-        '<div class="slot-totals">' +
-        '<span class="badge">Dự kiến <b class="mono">' + fmtMinutes(schedule.plannedMinutes) + '</b></span>' +
+    var sub = 'Cả tuần huynh định làm gì, và tuần đó thực tế lệch ở đâu. ' +
+      'Màu <b>trong ô</b> là kết quả đối chiếu; màu <b>ở cột trái</b> chỉ để phân biệt mục tiêu. ' +
+      'Đối chiếu là <b>ước lượng</b> từ dấu vết máy đọc được, không phải bảng chấm công.';
+    var head = '<button class="btn btn-sm" data-action="slot-form">Thêm buổi</button>';
+
+    var table = weekTableHtml(ctx, week, template);
+    if (!table.rows) {
+      return card('Thời khoá biểu', '刻',
+        '<p class="card-sub">' + sub + '</p>' +
+        '<div class="empty">Chưa có thời khoá biểu. Thêm vài buổi cố định trong tuần — ' +
+        'ví dụ “09:00–11:30 thứ Hai, học tiếng Nhật” — rồi DevTrace đối chiếu chúng với dấu vết thật. ' +
+        'Ô trống trong bảng cũng bấm được: nó tự điền sẵn đúng thứ và đúng khung giờ.</div>',
+        head);
+    }
+
+    var totals = '';
+    if (schedule && schedule.sessions && schedule.sessions.length) {
+      totals = '<div class="slot-totals">' +
+        '<span class="badge">' + esc(schedule.weekdayLabel || 'Hôm nay') +
+        ' — dự kiến <b class="mono">' + fmtMinutes(schedule.plannedMinutes) + '</b></span>' +
         '<span class="badge">Có dấu vết <b class="mono">' + fmtMinutes(schedule.matchedMinutes) + '</b></span>' +
         (schedule.unaccountedMinutes
           ? '<span class="badge">Chưa rõ chỗ <b class="mono">' + fmtMinutes(schedule.unaccountedMinutes) + '</b></span>' : '') +
         '</div>' +
-        '<p class="tiny muted mt">' + esc(schedule.note || '') + '</p>';
-    } else if (template.length) {
-      body = '<div class="empty">' + esc((schedule && schedule.weekdayLabel) || 'Ngày này') +
-        ' chưa có buổi nào trong thời khoá biểu. Thời khoá biểu đang có ' + template.length +
-        ' buổi ở các thứ khác.</div>';
-    } else {
-      body = '<div class="empty">Chưa có thời khoá biểu. Thêm vài buổi cố định trong tuần — ' +
-        'ví dụ “09:00–11:00 thứ Hai, làm dự án Nexus” — rồi DevTrace đối chiếu chúng với dấu vết thật.</div>';
+        '<p class="tiny muted">' + esc(schedule.note || '') + '</p>';
+    } else if (table.pending) {
+      totals = '<p class="tiny muted">Chưa đối chiếu được tuần này — máy chủ chưa trả số liệu. ' +
+        'Bảng dưới đây là mẫu lặp theo tuần, chưa có kết quả đối chiếu.</p>';
     }
 
     return card('Thời khoá biểu', '刻',
-      '<p class="card-sub">Các buổi trong tuần và việc định làm trong mỗi buổi. ' +
-      'Đối chiếu là <b>ước lượng</b> từ dấu vết máy đọc được, không phải bảng chấm công.</p>' + body,
-      '<button class="btn btn-sm" data-action="slot-form">Thêm buổi</button>');
+      '<p class="card-sub">' + sub + '</p>' + totals + table.html, head);
   }
 
   /* --- Bảng bốn tầm nhìn --------------------------------------------- */

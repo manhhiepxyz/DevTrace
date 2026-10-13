@@ -1103,8 +1103,14 @@ check('index.html có đủ điểm gắn của giao diện', ['id="nav"', 'id="
 
 const requiredClasses = ['card', 'stat', 'badge', 'btn', 'table', 'question', 'timeline', 'block-card', 'meter', 'journal-text', 'source-row', 'empty', 'grid', 'toast', 'modal', 'hbar',
   'alert', 'alert-list', 'disclosure', 'disclosure-body', 'settings-actions',
-  // Kế hoạch: dải thời khoá biểu, bảng bốn tầm nhìn, dải đợt, thẻ hộp thư, chip kho.
+  // Kế hoạch: bảng tuần, bảng bốn tầm nhìn, dải đợt, thẻ hộp thư, chip kho.
   'timetable', 'slot', 'slot-ok', 'slot-partial', 'slot-missed', 'slot-unknown',
+  // Bảng tuần: khung cuộn, hàng/cột, ô trống, hàng Nguyên tắc, dòng đối chiếu.
+  'timetable-wrap', 'slot-head', 'slot-head-time', 'slot-period', 'slot-col', 'slot-date',
+  'slot-upcoming', 'slot-today', 'slot-cell', 'slot-empty', 'slot-pending', 'slot-target',
+  'slot-goal-1', 'slot-goal-2', 'slot-goal-3', 'slot-goal-4', 'slot-goal-5',
+  'slot-goal-none', 'slot-goal-many', 'slot-detail-row', 'slot-detail-open',
+  'slot-principle-row', 'slot-principle-text',
   'board', 'board-col', 'task', 'task-done', 'sprint-band', 'mail-list', 'mail-row', 'repo-chip'];
 const missingClasses = requiredClasses.filter((name) => cssSrc.indexOf('.' + name) === -1);
 check('bảng kiểu có đủ lớp giao diện dùng tới', missingClasses.length === 0, missingClasses);
@@ -2805,6 +2811,11 @@ check('dữ liệu dựng sẵn cho màn hình có đủ bốn tầm nhìn', (fu
   buoi: plansView.timetable.length, cho_xep: plansView.backlog.length
 });
 
+/* Tuần của fixture nằm ở 16–22/11. Đặt `now` sau đó để không ngày nào bị
+   coi là "chưa tới" — trạng thái `upcoming` có phép kiểm riêng ở [14c]. */
+const AFTER_PLAN_WEEK = Date.parse('2026-11-25T10:00:00');
+const noEvidenceAt = () => ({ work: [] });
+
 const fullViewCtx = {
   /* Mở sẵn dòng đối chiếu của buổi thứ Sáu. Dòng đó chỉ dựng ra khi mục
      đang mở, nên nếu để đóng thì phép kiểm câu chữ bên dưới sẽ kiểm một
@@ -2824,7 +2835,13 @@ const fullViewCtx = {
     days: [],
     projects: Report.projectsRange(viewPlanConfig, 14),
     totalEvents: 0,
-    plans: plansView,
+    /* Bảng tuần đi kèm màn Hôm nay (`/api/plans?…&week=1`). `now` đặt sau
+       tuần của fixture để mọi ngày trong tuần đều đã xảy ra — nếu không thì
+       cả bảy ngày thành `upcoming` và phép kiểm câu chữ bên dưới sẽ kiểm
+       nhầm một trạng thái khác. Bằng chứng rỗng: ngày này chưa đọc được gì. */
+    plans: Object.assign({}, plansView, {
+      week: Plans.week(viewPlanConfig, PLAN_DAY, { evidenceFor: noEvidenceAt, now: AFTER_PLAN_WEEK })
+    }),
     repohealth: { snapshot: repoShot, stale: false, settings: RepoHealth.settingsOf(repoConfig) }
   }
 };
@@ -2850,29 +2867,255 @@ check('màn hình có dữ liệu kế hoạch không lộ undefined hay [object
   return name + ':' + (bad.join('+') || 'sạch');
 }));
 
-check('dải thời khoá biểu chỉ hiện buổi của đúng thứ đang xem', (function () {
+/* Bảng tuần hiện CẢ TUẦN, không phải ngày đang xem: buổi thứ Ba phải có mặt
+   dù hôm nay là thứ Sáu. Đây là phép kiểm ngược với dải chip cũ — bản cũ CẤM
+   buổi thứ Ba xuất hiện, và cấm đúng theo thiết kế cũ. */
+check('bảng tuần hiện đủ bảy cột và cả buổi của thứ khác ngày đang xem', (function () {
   const html = Views.today.render(fullViewCtx);
-  return html.indexOf('Buổi sáng') !== -1 && html.indexOf('Buổi thứ Ba') === -1
-    && html.indexOf('class="timetable"') !== -1;
-})(), Views.today.render(fullViewCtx).match(/slot-[a-z]+/g));
+  const heads = (html.match(/class="slot-col/g) || []).length;
+  return heads === 7
+    && html.indexOf('Buổi sáng') !== -1 && html.indexOf('Buổi thứ Ba') !== -1
+    && html.indexOf('<table class="timetable"') !== -1
+    && ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật']
+      .every((name) => html.indexOf('>' + name + '<') !== -1);
+})(), (function () {
+  const html = Views.today.render(fullViewCtx);
+  return { cot: (html.match(/class="slot-col/g) || []).length, bang: html.indexOf('<table class="timetable"') !== -1 };
+})());
+
+/* Cột trái phải nói được mục tiêu của cả hàng, và ô trống phải mang sẵn đúng
+   thứ + đúng khung giờ để bấm một cái là điền sẵn — không chọn lại từ đầu. */
+check('cột mục tiêu của hàng lấy từ việc horizon=goal, và ô trống mang sẵn thứ + giờ', (function () {
+  const html = Views.today.render(fullViewCtx);
+  return html.indexOf('slot-target') !== -1 && html.indexOf('chưa gắn mục tiêu') !== -1
+    && html.indexOf('data-value="new:3:09:00:11:00"') !== -1
+    && html.indexOf('slot-empty') !== -1;
+})(), Views.today.render(fullViewCtx).match(/new:\d:\d\d:\d\d:\d\d:\d\d/g));
+
+check('màn Hôm nay vẫn dựng được khi máy chủ CHƯA trả bảng tuần', (function () {
+  const ctx = Object.assign({}, fullViewCtx, {
+    data: Object.assign({}, fullViewCtx.data, {
+      plans: Object.assign({}, plansView, { week: undefined })
+    })
+  });
+  const html = Views.today.render(ctx);
+  /* Thiếu số liệu đối chiếu thì phải nói thẳng "chưa đối chiếu". Mượn
+     `slot-unknown` ở đây là nói sai: chữ đó có nghĩa "cả ngày không đọc được
+     dấu vết nào", không phải "máy chủ chưa trả lời". */
+  return html.indexOf('chưa đối chiếu') !== -1
+    && html.indexOf('class="slot slot-pending"') !== -1
+    && html.indexOf('Buổi sáng') !== -1
+    && html.indexOf('undefined') === -1 && html.indexOf('[object Object]') === -1;
+})(), (function () {
+  const ctx = Object.assign({}, fullViewCtx, {
+    data: Object.assign({}, fullViewCtx.data, {
+      plans: Object.assign({}, plansView, { week: undefined })
+    })
+  });
+  const html = Views.today.render(ctx);
+  return { co_bang: html.indexOf('<table class="timetable"') !== -1, cho_doi_chieu: html.indexOf('chưa đối chiếu') !== -1 };
+})());
 
 /* Chiều trung thực, kiểm ngay trên HTML: ngày này chưa có dấu vết nào, nên
    buổi phải là "chưa đối chiếu được" — tuyệt đối không phải "chưa làm". */
 check('buổi không có dấu vết hiện là chưa đối chiếu được, không phải chưa làm', (function () {
   const html = Views.today.render(fullViewCtx);
-  const at = html.indexOf('class="slot-detail"');
-  const detail = at === -1 ? '' : html.slice(at, at + 700);
+  const at = html.indexOf('slot-detail-open');
+  const detail = at === -1 ? '' : html.slice(at, at + 900);
   return html.indexOf('slot-unknown') !== -1
     && html.indexOf('chưa có dấu vết') !== -1
     && detail.indexOf('không đối chiếu được') !== -1
     && detail.indexOf('Vắng dữ liệu không có nghĩa là chưa làm') !== -1;
-})(), Views.today.render(fullViewCtx).slice(Views.today.render(fullViewCtx).indexOf('class="slot-detail"'), 260));
+})(), Views.today.render(fullViewCtx).slice(Views.today.render(fullViewCtx).indexOf('slot-detail-open'), 300));
 
 check('bảng bốn tầm nhìn hiện đủ bốn cột', (function () {
   const html = Views.today.render(fullViewCtx);
   return ['Hôm nay', 'Tuần này', 'Mục tiêu', 'Cố định hôm nay']
     .every((title) => html.indexOf(title) !== -1)
     && html.indexOf('class="board"') !== -1 && html.indexOf('board-col') !== -1;
+})());
+
+/* =====================================================================
+   [14c] Bảng tuần — mẫu lặp theo tuần, đối chiếu cả bảy ngày
+
+   Kho riêng, không dùng chung với [14b]: mấy phép kiểm dưới đây TẠO buổi,
+   và tạo vào kho của [14b] thì con số `timetable.length === 2` ở trên đổi
+   theo thứ tự chạy — đúng kiểu phép kiểm hỏng vì lý do chẳng liên quan.
+
+   Bằng chứng được cắm qua `evidenceFor` để chạy ngoại tuyến: bộ kiểm thử
+   không được phụ thuộc vào việc máy đang chạy có dữ liệu thật hay không.
+   ===================================================================== */
+
+const weekConfig = Object.assign({}, config, { dataDir: path.join(TEST_DIR, 'plan-week') });
+const WEEK_DAY = '2026-11-20';        // thứ Sáu
+const WEEK_START = '2026-11-16';      // thứ Hai của tuần đó
+const WEEK_END = '2026-11-22';        // Chủ nhật
+
+// Không có dấu vết nào — dùng cho mọi phép kiểm ở đây trừ khi nói khác.
+const NO_EVIDENCE = { evidenceFor: () => ({ work: [] }) };
+// 10:00 ngày 25/11: SAU cả tuần đang xem, nên mọi thứ trong tuần đều đã qua.
+const AFTER_WEEK = { now: Date.parse('2026-11-25T10:00:00') };
+// 10:00 ngày 10/11: TRƯỚC cả tuần đang xem, nên mọi thứ đều chưa tới.
+const BEFORE_WEEK = { now: Date.parse('2026-11-10T10:00:00') };
+const weekOpts = (extra) => Object.assign({}, NO_EVIDENCE, extra);
+
+/* Thứ tự ở đây KHÔNG được đảo: `taskSave` sinh id bằng `nextId`, nên chỉ kho
+   mới biết id thật là gì — phải gieo mục tiêu rồi mới đọc id ra để gắn vào
+   buổi. Gắn trước khi gieo thì `find` trả về undefined và cả tệp kiểm chết
+   ngay từ dòng đầu. */
+Plans.applyTask(weekConfig, 'save', {
+  title: 'Mục tiêu tuần thử', horizon: 'goal', targetDay: '2026-12-31'
+});
+const weekGoalId = Plans.view(weekConfig, WEEK_DAY).tasks.find((t) => t.horizon === 'goal').id;
+
+const weekSlot = (payload) => Plans.applySlot(weekConfig, 'save', payload);
+weekSlot({ weekday: 5, start: '09:00', end: '11:00', title: 'Buổi sáng', kind: 'study', taskId: weekGoalId });
+weekSlot({ weekday: 2, start: '09:00', end: '11:00', title: 'Buổi sáng', kind: 'study' });
+
+check('bảng tuần trả đúng bảy ngày, bắt đầu từ thứ Hai, đánh dấu ngày đang xem', (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  const viewed = w.days.filter((d) => d.isViewed);
+  return w.days.length === 7 && w.weekStart === WEEK_START && w.weekEnd === WEEK_END
+    && w.days[0].weekday === 1 && w.days[6].weekday === 7
+    && viewed.length === 1 && viewed[0].day === WEEK_DAY;
+})(), (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  return { so_ngay: w.days.length, dau: w.weekStart, cuoi: w.weekEnd, dang_xem: w.days.filter((d) => d.isViewed).map((d) => d.day) };
+})());
+
+/* Chiều trung thực thứ nhất: tuần đã qua mà máy không đọc được gì thì MỌI
+   buổi là `no-evidence`, và KHÔNG buổi nào được thành `missed`. Đây đúng là
+   chỗ dễ hỏng nhất khi gộp bảy ngày vào một bảng. */
+check('tuần không có dấu vết thì mọi buổi là chưa-đối-chiếu-được, không buổi nào là chưa-làm', (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  const all = w.days.reduce((acc, d) => acc.concat(d.sessions), []);
+  return all.length === 2
+    && all.every((s) => s.status === 'no-evidence')
+    && w.days.every((d) => d.counts.missed === 0);
+})(), (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  return w.days.map((d) => d.day.slice(8) + ':' + d.sessions.map((s) => s.status).join(','));
+})());
+
+/* Chiều trung thực thứ hai: ngày CHƯA TỚI không được mang `no-evidence`.
+   "Máy không đọc được gì" và "chưa có gì để đọc" là hai chuyện khác nhau. */
+check('ngày chưa tới mang trạng thái chưa-tới, không phải chưa-đối-chiếu-được', (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(BEFORE_WEEK));
+  const all = w.days.reduce((acc, d) => acc.concat(d.sessions), []);
+  return all.length === 2 && all.every((s) => s.status === 'upcoming')
+    && w.days.every((d) => d.upcoming && d.counts.noEvidence === 0 && d.counts.missed === 0);
+})(), (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(BEFORE_WEEK));
+  return w.days.map((d) => d.day.slice(8) + ':' + (d.upcoming ? 'chua-toi' : 'da-qua'));
+})());
+
+check('cột mục tiêu lấy từ việc có tầm nhìn mục tiêu, buổi không gắn thì để trống', (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  const fri = w.days.find((d) => d.day === WEEK_DAY).sessions;
+  const tue = w.days.find((d) => d.weekday === 2).sessions;
+  return fri.length === 1 && fri[0].goalTitle === 'Mục tiêu tuần thử'
+    && !!fri[0].goalId
+    && tue.length === 1 && tue[0].goalId === null && tue[0].goalTitle === null;
+})(), (function () {
+  const w = Plans.week(weekConfig, WEEK_DAY, weekOpts(AFTER_WEEK));
+  return w.days.filter((d) => d.sessions.length)
+    .map((d) => d.weekdayLabel + '=' + d.sessions.map((s) => s.goalTitle || '(chưa gắn)').join('|'));
+})());
+
+check('tạo một buổi cho nhiều thứ thì tạo đủ, và mỗi buổi một id riêng', (function () {
+  const r = Plans.applySlot(weekConfig, 'save', {
+    weekdays: [1, 3, 4], start: '13:30', end: '14:30', title: 'Buổi chiều', kind: 'admin'
+  });
+  if (!r.ok || !r.created || r.created.length !== 3) return false;
+  const ids = r.created.map((s) => s.id);
+  const days = r.created.map((s) => s.weekday);
+  return U.uniq(ids).length === 3 && days.join(',') === '1,3,4';
+})(), (function () {
+  const r = Plans.applySlot(weekConfig, 'save', {
+    weekdays: [1, 3, 4], start: '13:30', end: '14:30', title: 'Buổi chiều', kind: 'admin'
+  });
+  return r.ok ? r.created.map((s) => s.id + '@' + s.weekday).join(' ') : r.error;
+})());
+
+/* Phép kiểm quan trọng nhất của nhóm này: một thứ vướng thì CẢ LÔ bị từ
+   chối, và không buổi nào được tạo. Nếu mã vừa tạo vừa kiểm thì thứ Sáu và
+   thứ Bảy sẽ nằm lại trên đĩa — huynh có ba buổi mà không yêu cầu buổi nào. */
+check('lô có một thứ trùng giờ thì bị từ chối cả lô, không tạo buổi nào', (function () {
+  const before = Plans.view(weekConfig, WEEK_DAY).timetable.length;
+  const r = Plans.applySlot(weekConfig, 'save', {
+    weekdays: [1, 6, 7], start: '13:45', end: '14:00', title: 'Vướng', kind: 'admin'
+  });
+  const after = Plans.view(weekConfig, WEEK_DAY).timetable.length;
+  const weekdays = Plans.view(weekConfig, WEEK_DAY).timetable.map((s) => s.weekday);
+  return r.ok === false && typeof r.error === 'string' && r.error.indexOf('thứ Hai') !== -1
+    && after === before && weekdays.indexOf(6) === -1 && weekdays.indexOf(7) === -1;
+})(), (function () {
+  const view = Plans.view(weekConfig, WEEK_DAY);
+  return { so_buoi: view.timetable.length, cac_thu: U.uniq(view.timetable.map((s) => s.weekday)).sort().join(',') };
+})());
+
+check('dòng Nguyên tắc ghi được, đọc lại đúng, và không đụng tới các buổi', (function () {
+  const before = JSON.stringify(Plans.view(weekConfig, WEEK_DAY).timetable);
+  const r = Plans.applySlot(weekConfig, 'note', { text: '  Ăn xong nghỉ 20 phút rồi vào học luôn.  ' });
+  const after = Plans.view(weekConfig, WEEK_DAY);
+  return r.ok && after.principle === 'Ăn xong nghỉ 20 phút rồi vào học luôn.'
+    && JSON.stringify(after.timetable) === before;
+})(), (function () {
+  const r = Plans.applySlot(weekConfig, 'note', { text: '  Ăn xong nghỉ 20 phút rồi vào học luôn.  ' });
+  return { ok: r.ok, doc_lai: Plans.view(weekConfig, WEEK_DAY).principle };
+})());
+
+/* Dựng màn Hôm nay trên kho của [14c]: dùng lại nguyên `fullViewCtx` để không
+   phải chép tay hình dạng dữ liệu — chép tay thì nó thôi kiểm được gì mỗi khi
+   hình dạng đó đổi. */
+const weekUiCtx = (opts) => Object.assign({}, fullViewCtx, {
+  state: Object.assign({}, fullViewCtx.state, { day: WEEK_DAY, open: {} }),
+  data: Object.assign({}, fullViewCtx.data, {
+    digest: D.build(weekConfig, WEEK_DAY),
+    plans: Plans.view(weekConfig, WEEK_DAY, Object.assign({ week: true }, weekOpts(opts || AFTER_WEEK)))
+  })
+});
+
+check('cột trái của bảng hiện TÊN mục tiêu, và hàng Nguyên tắc hiện câu đã ghi', (function () {
+  const html = Views.today.render(weekUiCtx());
+  return html.indexOf('Mục tiêu tuần thử') !== -1
+    && html.indexOf('slot-target slot-goal-') !== -1
+    && html.indexOf('data-action="timetable-note"') !== -1
+    && html.indexOf('Ăn xong nghỉ 20 phút rồi vào học luôn.') !== -1
+    && html.indexOf('chưa gắn mục tiêu') !== -1;
+})(), (function () {
+  const html = Views.today.render(weekUiCtx());
+  const at = html.indexOf('slot-target');
+  return at === -1 ? '(không có cột mục tiêu)' : html.slice(at, at + 120);
+})());
+
+/* Một hàng mà các thứ gắn mục tiêu KHÁC NHAU thì không được tô màu của một
+   mục tiêu bất kỳ: làm thế là để cột trái nói dối về những thứ còn lại. */
+check('hàng có nhiều mục tiêu khác nhau thì nói thẳng ra, không tô màu bừa', (function () {
+  Plans.applyTask(weekConfig, 'save', { title: 'Mục tiêu thứ hai', horizon: 'goal', targetDay: '2026-12-31' });
+  const second = Plans.view(weekConfig, WEEK_DAY).tasks
+    .filter((t) => t.horizon === 'goal' && t.title === 'Mục tiêu thứ hai')[0];
+  if (!second) return false;
+  const r = weekSlot({ weekday: 4, start: '09:00', end: '11:00', title: 'Buổi sáng', taskId: second.id });
+  const html = Views.today.render(weekUiCtx());
+  return r.ok && html.indexOf('mục tiêu khác nhau giữa các thứ') !== -1
+    && html.indexOf('slot-target slot-goal-many') !== -1;
+})(), (function () {
+  const html = Views.today.render(weekUiCtx());
+  const at = html.indexOf('slot-goal-many');
+  return at === -1 ? '(không thấy hàng nhiều mục tiêu)' : html.slice(at - 24, at + 40);
+})());
+
+/* Màn Dự án cũng gọi `/api/plans`. Nếu bảng tuần dựng vô điều kiện thì nó
+   trả giá đọc bằng chứng của bảy ngày để rồi vứt đi. */
+check('bảng tuần chỉ dựng khi được hỏi, không dựng sẵn cho mọi lời gọi', (function () {
+  return Plans.view(weekConfig, WEEK_DAY).week === undefined
+    && Plans.view(weekConfig, WEEK_DAY, { week: true }).week.days.length === 7;
+})(), (function () {
+  return {
+    khong_hoi: typeof Plans.view(weekConfig, WEEK_DAY).week,
+    co_hoi: Plans.view(weekConfig, WEEK_DAY, { week: true }).week.days.length
+  };
 })());
 
 check('dải đợt làm việc hiện tên đợt, việc chờ xếp và nút đóng', (function () {

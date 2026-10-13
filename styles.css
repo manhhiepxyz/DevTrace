@@ -474,8 +474,64 @@ h1, h2, h3, h4 { font-family: var(--font-serif); font-weight: 600; letter-spacin
    Dải chip ở đầu màn Hôm nay. Màu chip là TRẠNG THÁI đối chiếu, không phải
    trang trí: xem một hàng là biết buổi nào khớp, buổi nào lệch. */
 
-.timetable { display: flex; flex-wrap: wrap; gap: 8px; }
-.slot-wrap { display: flex; flex-direction: column; min-width: 0; }
+.timetable-wrap { overflow-x: auto; margin-top: 10px; }
+.timetable { border-collapse: collapse; width: 100%; min-width: 760px; }
+.timetable th, .timetable td { border: 1px solid var(--line-soft); vertical-align: top; padding: 6px; }
+/* Cột trái: khung giờ + mục tiêu. Cố định bề rộng để bảy cột ngày chia đều
+   nhau, và để cuộn ngang thì cột này không bị bóp lại. */
+.slot-head {
+  text-align: left; width: 138px; min-width: 138px;
+  background: var(--bg-2); border-left: 3px solid transparent;
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.slot-head-time { display: flex; flex-direction: column; gap: 3px; text-transform: none; letter-spacing: 0; }
+.slot-period { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.slot-col { text-align: center; background: var(--bg-2); font-size: 12px; font-weight: 600; color: var(--ink); }
+.slot-date { display: block; font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); }
+.slot-upcoming { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); }
+.slot-today { background: var(--panel-2); }
+th.slot-today { color: var(--cinabar); }
+th.slot-today .slot-date, th.slot-today .slot-upcoming { color: var(--cinabar); }
+.slot-cell { background: var(--panel); min-width: 96px; }
+.slot-cell .slot { width: 100%; }
+/* Ô trống vẫn bấm được: nó mang sẵn đúng thứ và đúng khung giờ của chính nó. */
+.slot-empty {
+  width: 100%; min-height: 34px; cursor: pointer; font: inherit; font-size: 14px;
+  color: var(--muted); background: var(--bg-2);
+  border: 1px dashed var(--line); border-radius: var(--radius-sm);
+}
+.slot-empty:hover { color: var(--cinabar); border-color: var(--cinabar); }
+/* Chưa đối chiếu KHÁC "chưa có dấu vết". Ô này chỉ nói máy chủ chưa trả số
+   liệu tuần — nó không được phép mang nghĩa "cả ngày không đọc được gì". */
+.slot-pending {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  padding: 7px 9px; border: 1px dashed var(--line); border-radius: var(--radius-sm);
+  background: var(--bg-2); font-size: 12.5px;
+}
+.slot-pending .slot-state { color: var(--muted); }
+/* Năm màu mục tiêu là TRANG TRÍ để mắt tách hàng — hai mục tiêu khác nhau
+   hoàn toàn có thể trùng màu, nên tên mục tiêu luôn được ghi bằng chữ. */
+.slot-target {
+  font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0;
+  padding-left: 6px; border-left: 3px solid var(--line);
+}
+.slot-goal-1 { border-left-color: var(--indigo); color: var(--indigo); }
+.slot-goal-2 { border-left-color: var(--plum); color: var(--plum); }
+.slot-goal-3 { border-left-color: var(--jade); color: var(--jade); }
+.slot-goal-4 { border-left-color: var(--gold); color: var(--gold); }
+.slot-goal-5 { border-left-color: var(--cinabar); color: var(--cinabar); }
+.slot-goal-none { border-left-color: var(--line-soft); color: var(--muted); font-weight: 400; }
+.slot-goal-many { border-left-color: var(--line-soft); color: var(--muted); font-weight: 400; font-style: italic; }
+.slot-detail-row td { background: var(--panel-2); padding: 9px 11px; }
+.slot-detail-open + .slot-detail-open { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 9px; }
+.slot-detail-head { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.slot-principle-row .slot-head { vertical-align: middle; }
+.slot-principle-row td {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--tint); border-left: 3px solid var(--cinabar);
+}
+.slot-principle-text { font-size: 12.5px; color: var(--ink-soft); }
 .slot {
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   padding: 7px 11px; border-radius: var(--radius-sm); cursor: pointer;
@@ -501,12 +557,24 @@ h1, h2, h3, h4 { font-family: var(--font-serif); font-weight: 600; letter-spacin
    tô nó cùng màu với "lệch" là cách nhanh nhất để người đọc kết luận nhầm. */
 .slot-unknown { border-left-color: var(--muted); border-style: dashed; }
 .slot-off { border-left-color: var(--line); opacity: 0.75; }
-.slot-detail {
-  margin: 6px 0 0 3px; padding: 9px 11px; font-size: 12.5px;
-  border-left: 2px solid var(--line); background: var(--panel-2); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+/* Tích nhiều thứ khi tạo buổi: cùng một khung giờ lặp năm ngày là việc
+   thường, và bắt làm năm lần là bắt huynh làm việc của máy. */
+.slot-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.slot-day {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  padding: 4px 9px; font-size: 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--panel-2);
 }
+.slot-day:has(input:checked) { border-color: var(--cinabar); color: var(--cinabar); }
+.slot-detail-open { font-size: 12.5px; }
 .slot-note { color: var(--muted); font-size: 12px; margin: 4px 0; }
 .slot-totals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+/* Bảng bảy cột không nhét vừa màn hẹp; cuộn ngang là lối duy nhất giữ được
+   bố cục tuần mà không bóp cột đến mức không đọc nổi. */
+@media (max-width: 820px) {
+  .timetable { min-width: 640px; }
+  .slot-head { width: 112px; min-width: 112px; }
+}
 
 /* ---- Bảng bốn tầm nhìn ---- */
 

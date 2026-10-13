@@ -240,7 +240,10 @@ async function api(req, res, urlPath, query) {
   if (urlPath === '/api/plans' && req.method === 'GET') {
     const day = query.get('day') || '';
     if (!DAY_RE.test(day)) return sendJson(res, 400, { error: 'Thiếu hoặc sai tham số day (YYYY-MM-DD).' });
-    return sendJson(res, 200, Plans.view(config, day));
+    // `week=1` là phần THÊM, không phải route riêng — xem chú thích ngay
+    // trên. Màn Dự án gọi route này mà không kèm cờ, nên nó không phải trả
+    // giá đọc bằng chứng của bảy ngày cho một thứ nó không hiển thị.
+    return sendJson(res, 200, Plans.view(config, day, query.get('week') === '1' ? { week: true } : undefined));
   }
 
   if (urlPath === '/api/plans/task' && req.method === 'POST') {

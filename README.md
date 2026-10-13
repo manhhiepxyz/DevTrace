@@ -103,7 +103,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 619 kiểm tra
+npm test            # chạy 631 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -113,7 +113,7 @@ npm run icon        # vẽ lại biểu tượng devtrace.ico
 
 | Màn hình | Việc nó làm |
 | --- | --- |
-| **Hôm nay** | Dải thời khoá biểu ở trên cùng, bảng bốn tầm nhìn nhiệm vụ, ba câu hỏi dựng từ bằng chứng, khung nhật ký, thẻ hộp thư, và một danh sách cảnh báo duy nhất. |
+| **Hôm nay** | Bảng tuần ở trên cùng, bảng bốn tầm nhìn nhiệm vụ, ba câu hỏi dựng từ bằng chứng, khung nhật ký, thẻ hộp thư, và một danh sách cảnh báo duy nhất. |
 | **Dòng thời gian** | Sự kiện thô, lọc theo nguồn và tìm kiếm. Đây là chỗ kiểm chứng mọi kết luận. |
 | **Dự án** | Bảng bằng chứng gộp theo dự án trong 7/14/30/90 ngày, kèm sức khoẻ kho mã. |
 | **Lịch sử** | Lưới nhiệt theo ngày để nhìn nhịp làm việc dài hạn. |
@@ -134,7 +134,17 @@ chứ không phải gu: hai chỗ duy nhất trong dự án xoá dữ liệu là
 với chúng, và **không bao giờ** bị xoá theo hạn lưu trữ, kể cả khi huynh tắt `keepJournals`.
 
 - **Thời khoá biểu tuần** — các buổi trong tuần, mỗi buổi ghi rõ làm gì. Mẫu lặp lại, nên
-  sửa một lần là mọi tuần đổi theo.
+  sửa một lần là mọi tuần đổi theo. Màn Hôm nay dựng nó thành **bảng tuần**: cột trái là
+  mục tiêu dài hạn (việc có tầm nhìn *mục tiêu*), bảy cột là bảy thứ, mỗi hàng là một khung
+  giờ, hàng cuối là **Nguyên tắc** — một câu dùng chung cho cả tuần. Bấm một ô để mở dòng
+  đối chiếu ngay dưới hàng đó; bấm một **ô trống** để thêm buổi vào đúng thứ và đúng khung
+  giờ ấy, và tích được nhiều thứ một lượt.
+
+  Hai chỗ bảng tuần cố ý khác một thời khoá biểu vẽ tay. **Một:** màu *trong ô* là kết quả
+  đối chiếu, còn màu *ở cột trái* chỉ để phân biệt mục tiêu — nếu một ô mang cả hai nghĩa
+  thì người đọc sẽ tưởng ô xanh là "đã làm". **Hai:** hàng gộp theo **đúng cặp giờ**, nên
+  `09:00–11:00` và `09:05–11:00` là hai hàng riêng, vì giấu chuyện đó đi là nói dối về
+  chính thời khoá biểu của huynh.
 - **Bốn tầm nhìn nhiệm vụ** — việc trong ngày, việc theo tuần, mục tiêu dài hạn, và việc
   cố định. Việc cố định **không đẻ ra một dòng cho mỗi ngày**: nó được tính lại lúc đọc,
   nên một việc lặp cả năm vẫn chỉ là một dòng lưu trữ.
@@ -155,6 +165,12 @@ nhưng là việc khác**, và **chưa có dấu vết**.
 Trạng thái cuối là trạng thái quan trọng nhất. Ngày không có dữ liệu thì **mọi** buổi là
 *chưa có dấu vết*, không buổi nào là *chưa làm*. DevTrace không bao giờ nói huynh chưa làm
 một việc — nó chỉ nói được rằng nó không thấy dấu vết nào.
+
+Bảng tuần thêm trạng thái thứ năm, **chưa tới**, và nó cũng là một chuyện trung thực:
+ngày sau hôm nay thì *không có gì để đọc*, khác hẳn với *đã đọc mà không thấy gì*. Máy chủ
+cũng không đọc đĩa cho những ngày đó. Bảng tuần không đối chiếu được (chưa hỏi máy chủ, hoặc
+tệp kế hoạch hỏng) thì ô ghi thẳng **chưa đối chiếu** — không mượn chữ *chưa có dấu vết*,
+vì mượn là nói sai.
 
 Con số lệch là **ước lượng**, không phải đo: ngưỡng gộp 25 phút và ngưỡng nghỉ 8 phút
 khiến một buổi có nghỉ giữa bị tách khúc.
@@ -423,7 +439,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-619 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+631 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra

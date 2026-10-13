@@ -49,6 +49,11 @@ const TASK_STATUS = ['open', 'done', 'dropped'];
 // chính xác mà dữ liệu không có.
 const DONE_RATIO = 0.8;
 
+// Trần của dòng "Nguyên tắc" — một câu ghi chú dùng chung cho cả tuần.
+// Cắt ở đây chứ không ở giao diện: dữ liệu vào kho phải đã sạch, vì còn
+// đường khác ghi vào kho ngoài giao diện (API, tệp sửa tay).
+const NOTE_MAX = 400;
+
 /* --- Đường dẫn ------------------------------------------------------ */
 
 function plansDir(config) { return path.join(config.dataDir, 'plans'); }
@@ -57,7 +62,7 @@ function timetableFile(config) { return path.join(plansDir(config), 'timetable.j
 function sprintsFile(config) { return path.join(plansDir(config), 'sprints.json'); }
 
 function emptyTasks() { return { version: 1, updatedAt: 0, seq: 0, tasks: [], completions: {} }; }
-function emptyTimetable() { return { version: 1, updatedAt: 0, seq: 0, sessions: [] }; }
+function emptyTimetable() { return { version: 1, updatedAt: 0, seq: 0, principle: '', sessions: [] }; }
 function emptySprints() { return { version: 1, updatedAt: 0, seq: 0, sprints: [] }; }
 
 /* --- Đọc tệp, và giữ bằng chứng khi tệp hỏng ------------------------ */
@@ -164,6 +169,11 @@ function loadStore(config, opts) {
   store.tasks.tasks = Array.isArray(store.tasks.tasks) ? store.tasks.tasks : [];
   store.tasks.completions = isPlainObject(store.tasks.completions) ? store.tasks.completions : {};
   store.timetable.sessions = Array.isArray(store.timetable.sessions) ? store.timetable.sessions : [];
+  // "Nguyên tắc" là ghi chú tự do cho cả tuần. Đây là khoá ĐƯỢC THÊM, không
+  // phải khoá bị đổi tên: mảng `sessions` đi qua nguyên vẹn, nên mở bản cũ
+  // ra vẫn thấy đúng từng buổi như trước. Ép về chuỗi ở đây để chỗ đọc khỏi
+  // phải tự kiểm tra kiểu.
+  store.timetable.principle = textOf(store.timetable.principle).slice(0, NOTE_MAX);
   store.sprints.sprints = Array.isArray(store.sprints.sprints) ? store.sprints.sprints : [];
   store.error = firstCorruptMessage(corrupt);
   return store;
@@ -433,11 +443,17 @@ function overlapMinutes(spans, startMs, endMs) {
      partial     có khớp, nhưng ít hơn
      missed      trong khung đó có hoạt động, nhưng không phải việc này
      no-evidence CẢ NGÀY không đọc được dấu vết nào
+     upcoming    NGÀY CHƯA TỚI — chưa có gì để đối chiếu
 
    `no-evidence` không bao giờ được gộp vào `missed`. Ngày mà bộ thu thập
    không chạy — máy tắt, nguồn bị tắt trong Cài đặt — thì MỌI buổi đều là
    `no-evidence`, và giao diện phải nói "chưa có dấu vết", tuyệt đối không
-   nói "chưa làm". */
+   nói "chưa làm".
+
+   `upcoming` có mặt vì bảng tuần nhìn về phía trước. Thứ Sáu tuần này chưa
+   xảy ra, nên nó KHÔNG được mang `no-evidence` — chữ đó nói "máy không đọc
+   được gì", còn sự thật là "chưa có gì để đọc". Hai chuyện khác hẳn nhau,
+   và lẫn chúng là dựng một bảng tuần nói dối về tương lai. */
 function compareSessions(config, day, spans, opts) {
   const options = opts || {};
   const skipped = options.skipped || [];
@@ -452,6 +468,12 @@ function compareSessions(config, day, spans, opts) {
       return Object.assign({}, session, {
         plannedMinutes: planned, matchedMinutes: 0, unaccountedMinutes: 0,
         status: session.kind === 'break' ? 'break' : 'off', hasEvidence
+      });
+    }
+    if (options.upcoming) {
+      return Object.assign({}, session, {
+        plannedMinutes: planned, matchedMinutes: 0, unaccountedMinutes: 0,
+        status: 'upcoming', hasEvidence: false
       });
     }
     const key = sessionKey(config, session);
@@ -469,12 +491,17 @@ function compareSessions(config, day, spans, opts) {
     });
   });
 
-  const counted = rows.filter((row) => row.status !== 'break' && row.status !== 'off');
-  const counts = { done: 0, partial: 0, missed: 0, noEvidence: 0, break: 0, off: 0 };
+  /* Buổi chưa tới không được cộng vào tổng đã đối chiếu. Cộng vào thì
+     `unaccountedMinutes` của một ngày tương lai bằng đúng thời lượng dự
+     kiến — một con số đọc lên y hệt "đã bỏ không làm", mà lại nói về ngày
+     chưa xảy ra. */
+  const counted = rows.filter((row) => row.status !== 'break' && row.status !== 'off' && row.status !== 'upcoming');
+  const counts = { done: 0, partial: 0, missed: 0, noEvidence: 0, upcoming: 0, break: 0, off: 0 };
   for (const row of rows) {
     if (row.status === 'break') counts.break++;
     else if (row.status === 'off') counts.off++;
     else if (row.status === 'no-evidence') counts.noEvidence++;
+    else if (row.status === 'upcoming') counts.upcoming++;
     else counts[row.status]++;
   }
 
@@ -485,19 +512,24 @@ function compareSessions(config, day, spans, opts) {
     sessions: rows,
     counts,
     hasEvidence,
+    upcoming: !!options.upcoming,
     plannedMinutes: U.sum(counted, (row) => row.plannedMinutes),
     matchedMinutes: U.sum(counted, (row) => row.matchedMinutes),
     unaccountedMinutes: U.sum(counted, (row) => row.unaccountedMinutes),
     skipped,
     // Câu này đi thẳng vào giao diện và vào gói bằng chứng gửi cho AI.
-    note: sessionsNote(rows, counted, hasEvidence)
+    note: sessionsNote(rows, counted, hasEvidence, !!options.upcoming)
   };
 }
 
 const WEEKDAY_LABEL = { 1: 'thứ Hai', 2: 'thứ Ba', 3: 'thứ Tư', 4: 'thứ Năm', 5: 'thứ Sáu', 6: 'thứ Bảy', 7: 'Chủ nhật' };
 
-function sessionsNote(rows, counted, hasEvidence) {
+function sessionsNote(rows, counted, hasEvidence, upcoming) {
   if (!rows.length) return 'Ngày này chưa có buổi nào trong thời khoá biểu.';
+  // Phải đứng TRƯỚC nhánh "chỉ có buổi nghỉ": ngày chưa tới có `counted`
+  // rỗng (mọi buổi là `upcoming`), nên rơi vào nhánh kia là nói với huynh
+  // rằng thứ Sáu chỉ toàn buổi nghỉ — một câu sai hẳn.
+  if (upcoming) return 'Ngày này chưa tới, nên chưa có gì để đối chiếu. Đây là điều huynh định làm.';
   if (!counted.length) return 'Ngày này chỉ có buổi nghỉ trong thời khoá biểu.';
   if (!hasEvidence) {
     return 'Ngày này không đọc được dấu vết nào, nên không buổi nào đối chiếu được. '
@@ -515,6 +547,129 @@ function sessionsNote(rows, counted, hasEvidence) {
 function schedule(config, day, evidence, opts) {
   const spans = R.activitySpans(evidence.work, R.ACTIVE_GAP_MS);
   return compareSessions(config, day, spans, opts);
+}
+
+/* --- Cả tuần một lượt ----------------------------------------------- */
+
+/* Bảng thời khoá biểu nhìn cả tuần.
+
+   Vì sao cần: `schedule()` chỉ trả lời được "hôm nay thế nào". Nhưng thời
+   khoá biểu là MẪU LẶP THEO TUẦN — câu hỏi thật của huynh là "tuần này mình
+   định làm gì, và tuần này thực tế lệch ở đâu", mà trả lời nó bằng bảy lần
+   gọi rời rạc thì mỗi ô lại phải tự biết ngày của mình.
+
+   Ba quyết định ở đây, và lý do:
+
+   1. Dùng lại đúng `schedule()` cho từng ngày. Viết một luật đối chiếu thứ
+      hai cho bảng tuần là để hai chỗ nói hai kiểu về cùng một sự việc — rồi
+      thẻ Hôm nay và bảng tuần sẽ bất đồng ý với nhau, và không ai biết tin
+      chỗ nào.
+
+   2. Nạp kho MỘT LẦN rồi truyền `{ store }` xuống. Bảy lần `loadStore` là
+      bảy lần đọc cùng ba tệp, và tệ hơn: bảy ảnh chụp kho khác nhau, có thể
+      lệch nhau nếu huynh lưu gì đó đúng lúc bảng đang dựng.
+
+   3. Ngày chưa tới thì KHÔNG đọc bằng chứng, và mang trạng thái `upcoming`.
+      Vừa đỡ được bảy lần đọc đĩa, vừa là chuyện trung thực: không có gì để
+      đối chiếu thì đừng nói "không đọc được dấu vết". */
+function weekEndOf(day) { return U.shiftDay(weekStart(day), 6); }
+
+/* Mục tiêu dài hạn, tra theo id. Chỉ việc có `horizon === 'goal'` mới làm
+   nhãn cho cột Target — việc trong ngày gắn vào một buổi thì vẫn hợp lệ,
+   nhưng nó không phải mục tiêu, nên không được đứng ở cột đó. */
+function goalTitlesOf(store) {
+  const map = {};
+  for (const task of store.tasks.tasks) {
+    if (!isPlainObject(task) || !task.id) continue;
+    if (horizonOf(task) !== 'goal') continue;
+    map[task.id] = textOf(task.title, '(chưa đặt tên)');
+  }
+  return map;
+}
+
+function week(config, day, opts) {
+  const options = opts || {};
+  const store = options.store || loadStore(config, options);
+  const skipped = options.skipped || [];
+  const start = weekStart(day);
+  const today = todayKey(config, options);
+  const goals = goalTitlesOf(store);
+  const evidenceFor = options.evidenceFor || ((d) => R.evidence(config, d));
+
+  const decorate = (session) => {
+    const goalId = session.taskId && goals[session.taskId] ? session.taskId : null;
+    return {
+      id: session.id,
+      weekday: session.weekday,
+      day: session.day,
+      start: session.start,
+      end: session.end,
+      title: session.title,
+      kind: session.kind,
+      taskId: session.taskId || null,
+      goalId,
+      goalTitle: goalId ? goals[goalId] : null,
+      projectName: session.projectName || null,
+      plannedMinutes: session.plannedMinutes,
+      matchedMinutes: session.matchedMinutes,
+      unaccountedMinutes: session.unaccountedMinutes,
+      status: session.status
+    };
+  };
+
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const current = U.shiftDay(start, i);
+    // "Chưa tới" so với NGÀY THẬT HÔM NAY, không so với ngày đang xem: xem
+    // lại tuần trước thì thứ Sáu của tuần đó đã xảy ra rồi, dù nó đứng sau
+    // ngày đang xem.
+    const upcoming = current > today;
+    const spans = upcoming
+      ? { all: [], byProject: {} }
+      : R.activitySpans(evidenceFor(current).work, R.ACTIVE_GAP_MS);
+    const sched = compareSessions(config, current, spans, {
+      store, skipped, now: options.now, upcoming
+    });
+    days.push({
+      day: current,
+      weekday: sched.weekday,
+      weekdayLabel: sched.weekdayLabel,
+      isViewed: current === day,
+      isToday: current === today,
+      upcoming,
+      hasEvidence: sched.hasEvidence,
+      plannedMinutes: sched.plannedMinutes,
+      matchedMinutes: sched.matchedMinutes,
+      unaccountedMinutes: sched.unaccountedMinutes,
+      counts: sched.counts,
+      note: sched.note,
+      sessions: sched.sessions.map(decorate)
+    });
+  }
+
+  return {
+    ok: !store.error,
+    day,
+    weekday: weekdayOf(day),
+    weekdayLabel: WEEKDAY_LABEL[weekdayOf(day)] || null,
+    weekStart: start,
+    weekEnd: weekEndOf(day),
+    error: store.error,
+    principle: store.timetable.principle,
+    template: store.timetable.sessions.filter(isPlainObject).map(normalizeSession).filter(Boolean)
+      .map((session) => {
+        const goalId = session.taskId && goals[session.taskId] ? session.taskId : null;
+        return {
+          id: session.id, weekday: session.weekday, title: session.title,
+          start: session.start, end: session.end, kind: session.kind,
+          taskId: session.taskId || null, goalId, goalTitle: goalId ? goals[goalId] : null,
+          projectName: session.projectPath ? R.projectLabel(config, session.projectPath) : null
+        };
+      })
+      .sort((a, b) => (clockMinutes(a.start) - clockMinutes(b.start)) || (a.weekday - b.weekday)),
+    days,
+    skipped
+  };
 }
 
 /* --- Bảng việc: bốn tầm nhìn ---------------------------------------- */
@@ -668,14 +823,16 @@ function velocityOf(store) {
 /* --- Một chỗ để giao diện hỏi --------------------------------------- */
 
 function view(config, day, opts) {
-  const store = (opts && opts.store) || loadStore(config, opts);
+  const options = opts || {};
+  const store = options.store || loadStore(config, options);
   const skipped = [];
-  return {
+  const out = {
     ok: !store.error,
     day,
     weekday: weekdayOf(day),
     weekdayLabel: WEEKDAY_LABEL[weekdayOf(day)] || null,
     weekStart: weekStart(day),
+    principle: store.timetable.principle,
     error: store.error,
     corrupt: store.corrupt || {},
     warnings: Object.keys(store.corrupt || {}).map((k) => corruptMessage(store.corrupt[k])),
@@ -689,6 +846,22 @@ function view(config, day, opts) {
     velocity: velocityOf(store),
     skipped
   };
+
+  /* Bảng tuần là phần THÊM, chỉ dựng khi được hỏi (`?week=1`).
+
+     Vì sao không dựng sẵn: màn Dự án cũng gọi chính route này, mà nó không
+     cần bảng tuần — dựng sẵn là bắt nó trả giá đọc bằng chứng của bảy ngày
+     để rồi vứt đi. Và vì sao cùng một route chứ không phải route riêng:
+     xem chú thích ở `server.js` — tách ra thì hai bên có thể lệch ngày mà
+     không ai phát hiện.
+
+     `store` được truyền xuống: bảng tuần phải nhìn ĐÚNG ảnh chụp kho mà
+     phần trên vừa đọc, nếu không thì thêm một buổi xong tải lại có thể ra
+     bảng việc và bảng tuần nói hai chuyện khác nhau. */
+  if (options.week) {
+    out.week = week(config, day, Object.assign({}, options, { store, skipped }));
+  }
+  return out;
 }
 
 /* --- Thay đổi: việc -------------------------------------------------- */
@@ -845,11 +1018,29 @@ function applyTask(config, action, payload, opts) {
 
 /* --- Thay đổi: thời khoá biểu --------------------------------------- */
 
+const WEEKDAY_REQUIRED = 'Buổi phải thuộc một thứ trong tuần (1 = thứ Hai … 7 = Chủ nhật).';
+
+/* Hai buổi chồng nhau trong cùng một thứ là lỗi gõ, không phải kế hoạch:
+   đối chiếu với bằng chứng sẽ đếm cùng một quãng hai lần, và bức tranh
+   "hôm nay định làm gì" thành ra không đọc được. */
+function slotClash(part, weekday, start, end, skipId) {
+  const lo = clockMinutes(start);
+  const hi = clockMinutes(end);
+  if (lo == null || hi == null) return null;
+  return part.sessions.find((s) => isPlainObject(s) && s.id !== skipId
+    && Number(s.weekday) === weekday
+    && clockMinutes(s.start) != null && clockMinutes(s.end) != null
+    && clockMinutes(s.start) < hi && lo < clockMinutes(s.end)) || null;
+}
+
+/* Câu báo lỗi phải NÓI RA THỨ NÀO. Khi tạo một buổi cho cả tuần mà bị từ
+   chối, "trùng giờ" không đủ để huynh biết phải sửa ở đâu. */
+function clashMessage(clash, weekday) {
+  return 'Trùng với buổi "' + textOf(clash.title, clash.id) + '" (' + clash.start + '–' + clash.end
+    + ') vào ' + (WEEKDAY_LABEL[weekday] || ('thứ ' + weekday)) + '.';
+}
+
 function slotSave(config, part, input, opts) {
-  const weekday = Number(input.weekday);
-  if (!(weekday >= 1 && weekday <= 7)) {
-    return { error: 'Buổi phải thuộc một thứ trong tuần (1 = thứ Hai … 7 = Chủ nhật).' };
-  }
   const start = hhmm(input.start);
   const end = hhmm(input.end);
   if (!start || !end) return { error: 'Giờ phải theo dạng HH:MM, ví dụ 09:00.' };
@@ -861,19 +1052,8 @@ function slotSave(config, part, input, opts) {
     ? part.sessions.find((s) => isPlainObject(s) && s.id === input.id) : null;
   if (input.id && !existing) return { error: 'Không thấy buổi ' + input.id };
 
-  /* Hai buổi chồng nhau trong cùng một thứ là lỗi gõ, không phải kế hoạch:
-     đối chiếu với bằng chứng sẽ đếm cùng một quãng hai lần, và bức tranh
-     "hôm nay định làm gì" thành ra không đọc được. */
-  const clash = part.sessions.find((s) => isPlainObject(s) && s.id !== input.id
-    && Number(s.weekday) === weekday
-    && clockMinutes(s.start) != null && clockMinutes(s.end) != null
-    && clockMinutes(s.start) < clockMinutes(end) && clockMinutes(start) < clockMinutes(s.end));
-  if (clash) {
-    return { error: 'Trùng với buổi "' + textOf(clash.title, clash.id) + '" (' + clash.start + '–' + clash.end + ') cùng thứ.' };
-  }
-
   const fields = {
-    weekday, start, end, title,
+    start, end, title,
     projectId: input.projectId || null,
     projectPath: input.projectPath ? U.expandPath(input.projectPath) : null,
     taskId: input.taskId || null,
@@ -881,13 +1061,42 @@ function slotSave(config, part, input, opts) {
     enabled: input.enabled !== false
   };
 
+  /* Sửa một buổi đã có: vẫn phải nói rõ nó thuộc thứ nào, và vẫn phải kiểm
+     trùng giờ với các buổi KHÁC của thứ đó (bỏ qua chính nó). */
   if (existing) {
-    Object.assign(existing, fields);
+    const weekday = Number(input.weekday);
+    if (!(weekday >= 1 && weekday <= 7)) return { error: WEEKDAY_REQUIRED };
+    const clash = slotClash(part, weekday, start, end, input.id);
+    if (clash) return { error: clashMessage(clash, weekday) };
+    Object.assign(existing, fields, { weekday });
     return { session: existing };
   }
-  const session = Object.assign({ id: nextId(part, 'w') }, fields);
-  part.sessions.push(session);
-  return { session };
+
+  /* Tạo mới, và tạo được cho NHIỀU thứ cùng lúc.
+
+     Vì sao gộp một lô chứ không để giao diện gọi bảy lần: bảy lần gọi thì
+     lần thứ tư vướng là huynh đã có ba buổi nằm trên đĩa rồi và không có
+     cách lùi lại. Ở đây kiểm HẾT trước, chỉ tạo khi mọi thứ đều hợp lệ —
+     hoặc cả lô, hoặc không gì. Đó cũng là lý do phép kiểm phải chạy xong
+     hết trước khi `push` dòng đầu tiên: `mutate` gọi `change()` trên chính
+     kho trong bộ nhớ, nên vừa push vừa kiểm thì một thứ vướng ở giữa để
+     lại kho bẩn trong bộ nhớ, và lần đọc sau trong cùng tiến trình sẽ thấy
+     những buổi chưa từng được lưu. */
+  const days = Array.isArray(input.weekdays)
+    ? U.uniq(input.weekdays.map(Number))
+    : [Number(input.weekday)];
+  if (!days.length) return { error: 'Chọn ít nhất một thứ trong tuần cho buổi này.' };
+  for (const wd of days) {
+    if (!(wd >= 1 && wd <= 7)) return { error: WEEKDAY_REQUIRED };
+  }
+  for (const wd of days) {
+    const clash = slotClash(part, wd, start, end, null);
+    if (clash) return { error: clashMessage(clash, wd) };
+  }
+
+  const created = days.map((wd) => Object.assign({ id: nextId(part, 'w') }, fields, { weekday: wd }));
+  for (const session of created) part.sessions.push(session);
+  return { created, session: created[0], sessions: created };
 }
 
 function slotDelete(part, input) {
@@ -898,12 +1107,24 @@ function slotDelete(part, input) {
   return { removed };
 }
 
+/* Dòng "Nguyên tắc" — một câu ghi chú dùng chung cho cả tuần.
+
+   Nó KHÔNG phải một buổi, nên không nằm trong `sessions`. Nằm ở khoá riêng
+   cạnh đó, và đi qua đúng `mutate` như mọi thay đổi khác: tệp hỏng thì bị
+   từ chối ghi, chứ không âm thầm ghi đè mất cả thời khoá biểu. */
+function slotNote(part, input) {
+  const text = textOf(input.text).slice(0, NOTE_MAX);
+  part.principle = text;
+  return { principle: text };
+}
+
 function applySlot(config, action, payload, opts) {
   const input = payload || {};
   return mutate(config, 'timetable', opts, (store) => {
     const part = store.timetable;
     if (action === 'save') return slotSave(config, part, input, opts);
     if (action === 'delete') return slotDelete(part, input);
+    if (action === 'note') return slotNote(part, input);
     return { error: 'Thao tác buổi không rõ: ' + action };
   });
 }
@@ -1005,6 +1226,7 @@ module.exports = {
   corruptMessage, guardWritable,
   weekdayOf, weekStart, recursOn, occurrencesOn, sessionsOn, atTime,
   compareSessions, schedule, overlapMinutes,
+  week, weekEndOf,
   view, boardOf, backlogOf, velocityOf, sprintPoints,
   applyTask, applySlot, applySprint,
   HORIZONS, HORIZON_LABEL, FREQS, FREQ_LABEL, KINDS, KIND_LABEL, WEEKDAY_LABEL, TASK_STATUS, DONE_RATIO
