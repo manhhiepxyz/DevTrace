@@ -103,14 +103,31 @@ Trước đây thì ngược lại, và cái giá đo được là **15,2 giây*
 yêu cầu nào — mở ứng dụng lên là màn hình trắng đúng bằng chừng ấy, vì cả đường ống đọc git,
 đọc tệp, đọc lịch sử trình duyệt đều là lệnh đồng bộ. Nay trong lúc thu thập, giao diện vẫn
 chạy: nó hiện **số liệu của lần thu trước** kèm một dải báo nói thẳng điều đó, và tự vẽ lại
-khi xong. Đo lại trên chính máy này với 24 kho git: lượt thu thập vẫn mất 18 giây, nhưng
-trong suốt 18 giây đó máy chủ trả lời **13 132 yêu cầu liên tiếp, chậm nhất 121 ms**, và lượt
-nào cũng thấy trạng thái "đang thu thập" — thay cho một lần đứng hình 15 197 ms.
+khi xong. Đo lại trên chính máy này: lượt thu thập khi ấy vẫn mất 18 giây, nhưng trong suốt
+18 giây đó máy chủ trả lời **13 132 yêu cầu liên tiếp, chậm nhất 121 ms**, và lượt nào cũng
+thấy trạng thái "đang thu thập" — thay cho một lần đứng hình 15 197 ms.
 
 > **Đang thu thập thì chưa xoá sạch được.** Nút xoá sạch trong màn Cài đặt trả về lỗi cho tới
 > khi lượt thu thập xong. Tiến trình con đang ghi vào chính những tệp sắp bị xoá, và nó ghi
 > bằng cách thay cả tệp ngày — xen vào giữa chừng thì kết quả là một kho **nửa mới nửa cũ**,
 > không cách nào dựng lại.
+
+Phần đắt nhất của một lượt thu thập là git: **bốn lệnh cho mỗi kho**, chạy lần lượt. Với 53
+kho (24 kho khai trong cấu hình, cộng 29 kho `autoDiscover` tự tìm thêm) thì đó là 212 tiến
+trình git, đo được **12,2 giây — 75% của cả lượt thu thập**. Nhưng một lệnh git trên máy này
+tốn **40 ms dù nó làm gì** — đo cả `rev-parse`, `config` lẫn `status`, đều đúng 40 ms — nên
+phần lớn số đó là thời gian Windows dựng tiến trình, không phải thời gian đọc.
+
+Nay việc quét nằm trong một tiến trình riêng, chạy **16 kho một lúc**
+(`app/collect/git-scan.js`). Đo xen kẽ ba vòng trên đúng 53 kho ấy: **10 621 ms → 2 858 ms**.
+Nằm trong cả lượt thu thập thật thì nguồn git còn **khoảng 4,3 giây**, và cả lượt từ **16,3
+giây xuống khoảng 9,4 giây**.
+
+Song song chỉ được phép **nhanh hơn**, không được phép **khác**. Hỏng ở bất cứ khâu nào thì
+cả đường quay về lối tuần tự cũ và ghi chú nói ra — chứ không được biến thành "không kho nào
+có commit", vì đúng kiểu im lặng đó sẽ thay sạch lịch sử git bằng một bảng trắng.
+
+Còn khoảng bốn giây nữa nằm ở nguồn Codex. Chỗ đó chưa đụng tới.
 
 Không cần `npm install`. Không cần mạng. Chỉ cần Node 22 trở lên (dùng `node:sqlite`
 có sẵn để đọc lịch sử trình duyệt).
@@ -122,7 +139,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 730 kiểm tra
+npm test            # chạy 753 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -491,7 +508,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-730 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+753 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra
@@ -534,6 +551,11 @@ Ba nhóm mới, và mỗi nhóm kiểm một điều mà lời hứa suông khô
 - **Dải báo "đang thu dấu vết"** — chạy trong DOM giả: dải phải nằm **trên** nội dung và phải
   nói thẳng rằng số liệu bên dưới là của **lần thu trước**, nút thu thập bị khoá, có **đúng
   một** nhịp theo dõi 1,5 giây, và khi xong thì nhịp **tự dừng** và dải biến mất.
+- **Quét git song song** — hai đường đọc, đường tuần tự và đường quét sẵn, phải cho ra **cùng
+  một bảng sự kiện**, so từng trường: một kho rỗng trong bản quét vẫn là "đọc đủ" chứ không
+  khoá đường cập nhật, một kho đọc hụt thì **cả nguồn** là đọc hụt, quét hỏng thì có ghi chú
+  nói ra chứ không im lặng chậm gấp bốn, và nhóm thợ giữ **đúng thứ tự** kết quả, không bao
+  giờ vượt trần, không bỏ sót mục nào.
 
 Bài kiểm thử cố tình **không mở cửa sổ nào và không sinh tiến trình nào** — chỗ sinh tiến
 trình là một khe cắm, còn đường ống của tiến trình con thì được gọi thẳng trong chính tiến
@@ -561,8 +583,15 @@ bật ứng dụng lên làm phiền người đang ngồi trước máy.
   STARTTLS thì hỏng, tên thư mục không phải ASCII thì không hỗ trợ. Không có `IDLE`.
 - **"Chưa trả lời" và "chênh bao nhiêu phút" đều là ước lượng.** Đã ghi rõ ở hai mục trên, và
   giao diện luôn ghi kèm chữ *ước lượng* — chỗ nào ước lượng thì không được trình bày như đo.
+- **Một lượt thu thập vẫn mất khoảng chín giây.** Git đã nhanh lên 3,7 lần, nhưng giờ phần
+  đắt nhất lại là nguồn Codex — khoảng bốn giây đọc tệp rollout. Chỗ đó chưa được tối ưu, và
+  nó sẽ còn dài ra khi lịch sử dày lên.
 - **Cảnh báo kho mã tốn khoảng sáu lệnh git mỗi kho.** Mặc định quét 20 kho; quét cả danh sách
   là việc phải chọn, và nó chậm thật.
+- **Nguồn git của lượt thu thập quét HẾT mọi kho, không có trần 20.** Đó là hai đường khác
+  nhau: `healthMaxRepos` (mặc định 20) là trần của phần **sức khoẻ kho mã** ở màn Dự án, một
+  lượt quét riêng chỉ chạy khi huynh bấm. Còn lượt thu thập thì quét tất cả — trên máy này là
+  53 kho — nên nó mới là chỗ tốn thời gian, và cũng là chỗ vừa được sửa.
 
 ## Gợi ý cho chính huynh
 

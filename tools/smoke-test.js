@@ -671,6 +671,162 @@ check('cây làm việc sạch thì mọi con số bằng 0, không phải null'
 check('cây làm việc đọc hụt thì trả null, không bịa ra số 0',
   Git.workingTree(fakeRepo, () => null) === null);
 
+/* ---- Quét nhiều kho CÙNG LÚC ----------------------------------------
+
+   Bốn lệnh git cho mỗi kho, chạy lần lượt: đo trên máy này với 53 kho là
+   12,2 giây — 75% của cả lượt thu thập. Nhưng phần lớn số đó không phải
+   thời gian ĐỌC: một lệnh git ở đây tốn 40 ms dù nó làm gì, kể cả
+   `rev-parse`. Đó là thời gian Windows dựng tiến trình.
+
+   Nên việc quét dời sang một tiến trình riêng chạy nhiều kho một lúc. Điều
+   phải canh không phải "nó có nhanh hơn không" — mà là **hai đường phải ra
+   CÙNG một kết quả**. Đường tuần tự vẫn là đường chính (bộ kiểm thử và tệp
+   lệnh gọi nó), nên hai đường lệch nhau nghĩa là dữ liệu git phụ thuộc vào
+   việc ai gọi nó. Đó là thứ không được phép xảy ra, và đó là thứ nhóm kiểm
+   tra dưới đây canh.
+
+   Không sinh tiến trình nào: `opts.scan` là khe cắm, đúng lối `opts.runGit`
+   đã có từ trước. */
+
+const GitScan = require('../app/collect/git-scan');
+
+const LOG_TEXT = '@@aaa111|1700000000|Nguyễn Mạnh Hiệp|a@b.c|sửa lỗi đăng nhập\n3\t1\tsrc/a.js\n5\t0\tsrc/b.js\n';
+const SCAN_STATUS = ' M src/a.js\n?? moi.txt\n';
+const SCAN_LOG_ARGS = Git.logArgs().join(' ');
+
+/* Khe cắm của git.js trả về CHUỖI hoặc null (đọc hụt). Khe cắm của
+   git-scan.js trả về { ok, out, err } — nó phải phân biệt được "git trả lời
+   rằng rỗng" với "git không trả lời", và một chuỗi rỗng không nói được điều
+   đó. Hai hình dạng khác nhau là cố ý; bài kiểm thử phải có cả hai. */
+function twoWayRunner(repo, args) {
+  const key = args.join(' ');
+  if (key === 'rev-parse --abbrev-ref HEAD') return 'main\n';
+  if (key === 'config --get remote.origin.url') return 'git@github.com:manhhiepxyz/DevTrace.git\n';
+  if (key === 'status --porcelain=v1') return SCAN_STATUS;
+  if (key === SCAN_LOG_ARGS) return LOG_TEXT;
+  return null;
+}
+
+function probeRunner(repo, args) {
+  const key = args.join(' ');
+  const ok = (out) => Promise.resolve({ ok: true, out: out, err: '' });
+  const bad = (err) => Promise.resolve({ ok: false, out: '', err: err });
+  if (key === 'rev-parse --abbrev-ref HEAD') return ok('main\n');
+  if (key === 'config --get remote.origin.url') return ok('git@github.com:manhhiepxyz/DevTrace.git\n');
+  if (key === 'status --porcelain=v1') return ok(SCAN_STATUS);
+  if (key === SCAN_LOG_ARGS) return ok(LOG_TEXT);
+  return bad('fatal: khong biet');
+}
+
+check('bốn lệnh git của một kho được khai MỘT chỗ, hai đường dùng chung',
+  Git.STATUS_ARGS.join(' ') === 'status --porcelain=v1'
+  && Git.BRANCH_ARGS.join(' ') === 'rev-parse --abbrev-ref HEAD'
+  && Git.REMOTE_ARGS.join(' ') === 'config --get remote.origin.url'
+  && Git.logArgs()[0] === 'log', [Git.STATUS_ARGS, Git.logArgs()]);
+
+check('bộ đếm cây làm việc tách ra dùng chung cho cả hai đường', (function () {
+  const direct = Git.parseWorkingTree(SCAN_STATUS);
+  const viaSeam = Git.workingTree(fakeRepo, twoWayRunner);
+  /* Hai dòng: ' M src/a.js' (sửa ở cây làm việc) và '?? moi.txt' (mới).
+     Cột X của cả hai đều không phải thay đổi đã chuẩn bị, nên staged = 0;
+     cột Y thì cả hai đều có, nên unstaged = 2. */
+  return JSON.stringify(direct) === JSON.stringify(viaSeam)
+    && direct.total === 2 && direct.modified === 1 && direct.untracked === 1
+    && direct.staged === 0 && direct.unstaged === 2;
+})());
+check('cây làm việc đọc hụt vẫn là null ở cả hai đường',
+  Git.parseWorkingTree(null) === null && Git.fromScan(null) === null
+  && Git.fromScan({ repo: 'x', isRepo: false }) === null);
+
+check('phân loại log của tiến trình quét giống hệt git.js', (function () {
+  const read = (out) => ({ ok: true, out: out, err: '' });
+  const failed = (err) => ({ ok: false, out: '', err: err });
+  const good = GitScan.classifyLog(read(LOG_TEXT), Git.EMPTY_REPO_RE);
+  const empty = GitScan.classifyLog(failed("fatal: your current branch 'main' does not have any commits yet"), Git.EMPTY_REPO_RE);
+  const broken = GitScan.classifyLog(failed('fatal: not a git repository'), Git.EMPTY_REPO_RE);
+  const blank = GitScan.classifyLog(read('   '), Git.EMPTY_REPO_RE);
+  return good.logOk && !good.logEmpty && good.log === LOG_TEXT
+    && empty.logOk && empty.logEmpty && empty.log === ''
+    && !broken.logOk && !broken.logEmpty
+    && blank.logOk && blank.logEmpty;
+})());
+
+/* Hai đường đọc cùng một kho phải ra CÙNG một kết quả. Đây là phép kiểm
+   quan trọng nhất của nhóm này: đường quét sẵn chỉ được phép NHANH HƠN,
+   không được phép KHÁC. */
+
+const secondRepo = path.join(TEST_DIR, 'kho-gia-2');
+fs.mkdirSync(path.join(secondRepo, '.git'), { recursive: true });
+
+const twoRepoConfig = JSON.parse(JSON.stringify(config));
+twoRepoConfig.sources.git = { enabled: true, repos: [fakeRepo, secondRepo], authors: ['Nguyễn Mạnh Hiệp'] };
+
+/* Mốc thời gian của sự kiện "cây làm việc còn thay đổi" là Date.now(), nên
+   hai lần chạy liền nhau có thể lệch đúng một mili-giây. So sánh thì bỏ nó
+   đi — còn mọi trường khác phải giống từng chữ. */
+function normalizeEvents(events) {
+  return events.map((e) => (e.kind === 'worktree' ? Object.assign({}, e, { ts: 0 }) : e));
+}
+
+check('quét sẵn và quét lần lượt cho ra CÙNG một bảng sự kiện', (function () {
+  const sequential = Git.collect(twoRepoConfig, { runGit: twoWayRunner });
+  const prefetched = new Map([[fakeRepo, {
+    repo: fakeRepo, isRepo: true, branch: 'main\n',
+    remote: 'git@github.com:manhhiepxyz/DevTrace.git\n',
+    logOk: true, logEmpty: false, log: LOG_TEXT,
+    statusOk: true, status: SCAN_STATUS
+  }], [secondRepo, {
+    repo: secondRepo, isRepo: true, branch: 'main\n',
+    remote: 'git@github.com:manhhiepxyz/DevTrace.git\n',
+    logOk: true, logEmpty: false, log: LOG_TEXT,
+    statusOk: true, status: SCAN_STATUS
+  }]]);
+  const scanned = Git.collect(twoRepoConfig, { scan: () => ({ map: prefetched, error: null }) });
+
+  const a = JSON.stringify(normalizeEvents(sequential.events));
+  const b = JSON.stringify(normalizeEvents(scanned.events));
+  return a === b && sequential.events.length === 4 && sequential.complete === true
+    && scanned.complete === true && sequential.notes.length === scanned.notes.length;
+})(), (function () {
+  const sequential = Git.collect(twoRepoConfig, { runGit: twoWayRunner });
+  const scanned = Git.collect(twoRepoConfig, { scan: () => ({ map: new Map(), error: null }) });
+  return { tuanTu: normalizeEvents(sequential.events).length, quetSan: scanned.events.length };
+})());
+
+check('kho rỗng trong bản quét vẫn là "đọc đủ", không khoá đường cập nhật', (function () {
+  const map = new Map([[fakeRepo, {
+    repo: fakeRepo, isRepo: true, branch: null, remote: null,
+    logOk: true, logEmpty: true, log: '', statusOk: true, status: ''
+  }]]);
+  const out = Git.collect(twoRepoConfig, { scan: () => ({ map: map, error: null }) });
+  return out.complete === true && out.events.filter((e) => e.kind === 'commit').length === 0;
+})());
+
+check('một kho đọc hụt trong bản quét thì cả nguồn là đọc hụt', (function () {
+  const map = new Map([[fakeRepo, {
+    repo: fakeRepo, isRepo: true, branch: 'main\n', remote: '',
+    logOk: false, logEmpty: false, log: '', statusOk: true, status: ''
+  }], [secondRepo, {
+    repo: secondRepo, isRepo: true, branch: 'main\n', remote: '',
+    logOk: true, logEmpty: false, log: LOG_TEXT, statusOk: false, status: null
+  }]]);
+  const out = Git.collect(twoRepoConfig, { scan: () => ({ map: map, error: null }) });
+  return out.complete === false;
+})());
+
+check('quét sẵn hỏng thì nói ra, không im lặng chậm gấp bốn', (function () {
+  const out = Git.collect(twoRepoConfig, { scan: () => ({ map: null, error: 'hết giờ' }) });
+  return out.notes.some((n) => n.indexOf('quét song song không chạy được') !== -1 && n.indexOf('hết giờ') !== -1);
+})());
+
+check('bài kiểm thử truyền khe cắm git thì KHÔNG thử quét song song',
+  Git.scanAll([fakeRepo, secondRepo], { runGit: twoWayRunner }) === null);
+check('một kho thì không dựng thêm tiến trình làm gì',
+  Git.scanAll([fakeRepo], {}) === null);
+
+check('tiến trình quét được gọi kèm windowsHide, không nháy cửa sổ đen',
+  /windowsHide:\s*true/.test(fs.readFileSync(path.join(ROOT, 'app', 'collect', 'git-scan.js'), 'utf8')));
+
 /* ---- Nguồn GitHub: chạy ngoại tuyến, khoá chỉ được nhắc tên ---- */
 
 const GitHub = require('../app/collect/github');
@@ -4522,6 +4678,98 @@ function checkCollectBanner() {
   });
 }
 
+/* ---- Quét song song: phần phải chạy bất đồng bộ ----------------------
+   `runOne` và `inPool` là hàm async, nên chúng nằm ở dây bất đồng bộ cuối
+   tệp. Vẫn không sinh tiến trình nào — khe cắm làm hết việc gọi git. */
+
+function checkParallelGit() {
+  section('[8b] Quét nhiều kho cùng lúc, chạy thật qua khe cắm');
+
+  /* `testConfig()` xoá sạch TEST_DIR mỗi lần được gọi, nên hai kho giả dựng
+     ở đầu tệp đã biến mất từ lâu. Phần này tự dựng lại chỗ của nó — dựa vào
+     thư mục do đoạn đồng bộ để lại thì phép kiểm sẽ đỏ vì một lý do chẳng
+     liên quan gì tới thứ nó định canh. */
+  fs.mkdirSync(path.join(fakeRepo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(secondRepo, '.git'), { recursive: true });
+
+  const asked = [];
+  const recording = function (repo, args) {
+    asked.push(repo + ' :: ' + args.join(' '));
+    return probeRunner(repo, args);
+  };
+
+  return GitScan.runOne(fakeRepo, recording).then(function (rec) {
+    check('tiến trình quét đọc đủ một kho',
+      rec.isRepo === true && rec.branch === 'main\n' && rec.remote.indexOf('DevTrace') !== -1,
+      rec);
+    check('log đọc được thì giữ nguyên chữ git in ra, chưa diễn giải gì',
+      rec.logOk === true && rec.logEmpty === false && rec.log === LOG_TEXT);
+    check('cây làm việc đọc được thì giữ nguyên chữ --porcelain',
+      rec.statusOk === true && rec.status === SCAN_STATUS);
+    check('một kho tốn ĐÚNG bốn lệnh git, không hơn',
+      asked.length === 4, asked);
+    check('bốn lệnh ấy dùng đúng cách viết chung với git.js',
+      asked[0].indexOf(Git.BRANCH_ARGS.join(' ')) !== -1
+      && asked[1].indexOf(Git.REMOTE_ARGS.join(' ')) !== -1
+      && asked[2].indexOf(SCAN_LOG_ARGS) !== -1
+      && asked[3].indexOf(Git.STATUS_ARGS.join(' ')) !== -1, asked);
+
+    const emptyRepo = function (repo, args) {
+      if (args.join(' ') === SCAN_LOG_ARGS) {
+        return Promise.resolve({ ok: false, out: '', err: "fatal: your current branch 'main' does not have any commits yet" });
+      }
+      return probeRunner(repo, args);
+    };
+    return GitScan.runOne(fakeRepo, emptyRepo);
+  }).then(function (rec) {
+    check('kho rỗng: git báo lỗi nhưng DevTrace coi là đọc đủ, không phải đọc hụt',
+      rec.logOk === true && rec.logEmpty === true && rec.log === '');
+    check('nhánh không đọc được thì để null, KHÔNG bịa thành chuỗi rỗng',
+      rec.branch === 'main\n');
+
+    let called = false;
+    return GitScan.runOne(path.join(TEST_DIR, 'khong-phai-kho'), function () {
+      called = true;
+      return Promise.resolve({ ok: true, out: '', err: '' });
+    }).then(function (notRepo) {
+      check('thư mục không có .git thì không gọi git lấy một lần nào',
+        notRepo.isRepo === false && called === false, notRepo);
+    });
+  }).then(function () {
+    /* Nhóm thợ: giữ đúng thứ tự, và không bao giờ vượt quá số việc cho phép.
+       Vượt trần nghĩa là mở năm mươi tiến trình git cùng lúc trên một ổ đĩa —
+       nhanh hơn không thấy đâu mà máy thì đứng. */
+    const items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    let inFlight = 0;
+    let peak = 0;
+    const finished = [];
+    return GitScan.inPool(items, 3, function (n) {
+      inFlight++;
+      if (inFlight > peak) peak = inFlight;
+      return new Promise(function (resolve) {
+        setTimeout(function () { inFlight--; finished.push(n); resolve(n * 2); }, 1);
+      });
+    }).then(function (results) {
+      check('nhóm thợ giữ nguyên thứ tự kết quả',
+        results.join(',') === items.map((n) => n * 2).join(','), results);
+      check('nhóm thợ không bao giờ vượt quá số việc cho phép', peak <= 3 && peak === 3, peak);
+      check('mọi mục đều được làm, không mục nào bị bỏ', finished.length === items.length, finished.length);
+    });
+  }).then(function () {
+    /* Một mục thì trần là một — `Math.min` phải kẹp lại, không được để
+       vòng lặp dựng 16 thợ cho một việc. */
+    let peakOne = 0;
+    let live = 0;
+    return GitScan.inPool([42], 16, function (n) {
+      live++;
+      if (live > peakOne) peakOne = live;
+      return new Promise(function (resolve) { setTimeout(function () { live--; resolve(n); }, 1); });
+    }).then(function (out) {
+      check('một mục thì chỉ một thợ', peakOne === 1 && out[0] === 42, peakOne);
+    });
+  });
+}
+
 /* Phần tắt-máy-chủ của mục [12] và phần bật-máy-chủ của app Electron phải
    chạy trước: chúng bất đồng bộ, và cả tệp này là CommonJS nên không có await
    ở cấp cao nhất. Chạy chúng ở đây để mọi kiểm tra bất đồng bộ nằm chung một
@@ -4530,6 +4778,8 @@ checkStopGuards().then(function () {
   return checkEnsureServer();
 }).then(function () {
   return checkServerRoutes();
+}).then(function () {
+  return checkParallelGit();
 }).then(function () {
   return checkBackgroundCollect();
 }).then(function () {

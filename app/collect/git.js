@@ -16,6 +16,18 @@ const C = require('../config');
 const MAX_COMMITS = 400;
 const SINCE_DAYS = 60;
 
+/* Bốn lệnh git của một kho, khai MỘT chỗ. `app/collect/git-scan.js` chạy
+   đúng bốn lệnh này song song cho nhiều kho, nên để chúng nằm rải rác hai
+   nơi là mở đường cho hai đường đọc lệch nhau mà không ai phát hiện. */
+const BRANCH_ARGS = ['rev-parse', '--abbrev-ref', 'HEAD'];
+const REMOTE_ARGS = ['config', '--get', 'remote.origin.url'];
+const STATUS_ARGS = ['status', '--porcelain=v1'];
+const LOG_FMT = '@@%H|%ct|%an|%ae|%s';
+function logArgs() {
+  return ['log', '--since=' + SINCE_DAYS + ' days ago', '--date=unix',
+    '--pretty=format:' + LOG_FMT, '--numstat', '-n', String(MAX_COMMITS)];
+}
+
 /* Chạy git và GIỮ LẠI stderr. Giữ stderr không phải để hiện lỗi cho huynh
    đọc, mà để phân biệt hai thứ trông giống hệt nhau nếu chỉ nhìn mã thoát:
    "git đọc không nổi" và "kho này chưa có commit nào". Cái đầu là đọc hụt —
@@ -69,8 +81,8 @@ function matchesAuthor(commit, authors) {
 function repoInfo(repo, run) {
   const r = run || git;
   if (!U.isDir(path.join(repo, '.git'))) return null;
-  const branch = (r(repo, ['rev-parse', '--abbrev-ref', 'HEAD']) || '').trim() || 'không rõ nhánh';
-  const remote = (r(repo, ['config', '--get', 'remote.origin.url']) || '').trim();
+  const branch = (r(repo, BRANCH_ARGS) || '').trim() || 'không rõ nhánh';
+  const remote = (r(repo, REMOTE_ARGS) || '').trim();
   return { branch, remote };
 }
 
@@ -83,19 +95,22 @@ function repoInfo(repo, run) {
    cắm trả về chuỗi (đọc được) hoặc null (không đọc được); đây là dạng gọn
    của gitFull dành cho bài kiểm thử. */
 function readCommitsDetailed(repo, runGit) {
-  const fmt = '@@%H|%ct|%an|%ae|%s';
+  /* `emptyRepoRe` là tham số thứ ba để `fromScan` dùng lại đúng phép phân
+     loại này, thay vì chép lại nó ở một chỗ thứ hai. */
+  return readCommitsWith(repo, runGit, EMPTY_REPO_RE);
+}
+
+function readCommitsWith(repo, runGit, emptyRepoRe) {
   if (runGit) {
-    const out = runGit(repo, ['log', '--since=' + SINCE_DAYS + ' days ago', '--date=unix',
-      '--pretty=format:' + fmt, '--numstat', '-n', String(MAX_COMMITS)]);
+    const out = runGit(repo, logArgs());
     if (out == null) return { ok: false, commits: [], empty: false };
     return { ok: true, commits: parseLog(out), empty: !String(out).trim() };
   }
-  const result = gitFull(repo, ['log', '--since=' + SINCE_DAYS + ' days ago', '--date=unix',
-    '--pretty=format:' + fmt, '--numstat', '-n', String(MAX_COMMITS)]);
+  const result = gitFull(repo, logArgs());
   if (!result.ok) {
     // Kho chưa có commit nào: git báo lỗi, còn DevTrace coi đó là câu trả lời
     // hợp lệ ("kho rỗng"), không phải đọc hụt.
-    if (EMPTY_REPO_RE.test(result.err || '')) return { ok: true, commits: [], empty: true };
+    if (emptyRepoRe.test(result.err || '')) return { ok: true, commits: [], empty: true };
     return { ok: false, commits: [], empty: false };
   }
   return { ok: true, commits: parseLog(result.out), empty: !result.out.trim() };
@@ -140,7 +155,13 @@ function readCommits(repo) { return readCommitsDetailed(repo).commits; }
    `run` là khe cắm kiểm thử, như ở `repoInfo`. */
 function workingTree(repo, run) {
   const r = run || git;
-  const out = r(repo, ['status', '--porcelain=v1']);
+  return parseWorkingTree(r(repo, STATUS_ARGS));
+}
+
+/* Tách khỏi `workingTree` để đường quét song song dùng lại đúng phép đếm
+   này. Hai đường đếm cùng một chuỗi `--porcelain` mà ra hai con số khác
+   nhau là thứ không được phép xảy ra. `null` nghĩa là đọc hụt. */
+function parseWorkingTree(out) {
   if (out == null) return null;
   const lines = String(out).split('\n').filter((l) => l.trim());
   let staged = 0;
@@ -154,6 +175,80 @@ function workingTree(repo, run) {
   const modified = lines.filter((l) => !l.startsWith('??')).length;
   const untracked = lines.filter((l) => l.startsWith('??')).length;
   return { modified, untracked, total: lines.length, staged, unstaged };
+}
+
+/* =====================================================================
+   Quét nhiều kho CÙNG LÚC.
+
+   Bốn lệnh git cho mỗi kho, chạy lần lượt: đo trên máy này với 53 kho là
+   12,2 giây — 75% của cả một lượt thu thập, mà phần lớn là chờ ổ đĩa và
+   chờ git khởi động chứ không phải tính toán.
+
+   Việc quét nằm trong một tiến trình riêng (app/collect/git-scan.js) vì cả
+   đường ống thu thập là ĐỒNG BỘ và phải ở nguyên như thế. Hàm dưới đây chỉ
+   lo phần gọi tiến trình đó và kiểm tra nó trả về thứ đọc được.
+
+   KHÔNG BAO GIỜ để chỗ này làm mất dữ liệu: hỏng ở bất cứ khâu nào thì trả
+   về `null`, và cả đường quay lại lối tuần tự cũ. Quét song song hỏng mà
+   biến thành "không kho nào có commit" thì `persist` sẽ thay sạch lịch sử
+   git bằng một bảng trắng — đúng kiểu im lặng mà dự án này cấm.
+   ===================================================================== */
+
+const SCAN_SCRIPT = path.join(__dirname, 'git-scan.js');
+/* Rộng hơn hẳn 12,2 giây của lối tuần tự: tiến trình con phải có cơ hội
+   chạy xong trước khi bị cắt, nếu không thì "hết giờ" biến thành "quay về
+   lối chậm" một cách vô ích. */
+const SCAN_TIMEOUT_MS = 180000;
+
+/* Trả về `{ map, error }`, hoặc `null` khi KHÔNG thử quét song song:
+     - bài kiểm thử truyền khe cắm git (đường tuần tự là đường kiểm được);
+     - chỉ có một kho — song song chẳng lợi gì mà thêm một tiến trình. */
+function scanAll(repos, opts) {
+  if (opts && opts.runGit) return null;
+  const list = repos.filter((repo) => U.isDir(repo));
+  if (list.length < 2) return null;
+
+  let raw;
+  try {
+    raw = execFileSync(process.execPath, [SCAN_SCRIPT, JSON.stringify({ repos: list })], {
+      encoding: 'utf8',
+      timeout: SCAN_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+      env: process.env
+    });
+  } catch (error) {
+    return { map: null, error: String((error && error.message) || error) };
+  }
+
+  let parsed = null;
+  try { parsed = JSON.parse(String(raw)); } catch (error) { parsed = null; }
+  if (!parsed || parsed.ok !== true || !Array.isArray(parsed.repos)) {
+    return { map: null, error: parsed && parsed.error ? String(parsed.error) : 'dữ liệu trả về không đọc được' };
+  }
+
+  const map = new Map();
+  for (const item of parsed.repos) if (item && item.repo) map.set(item.repo, item);
+  return { map: map, error: null };
+}
+
+/* Rút từ một bản ghi quét sẵn ra ĐÚNG ba thứ mà đường tuần tự đọc được:
+   thông tin kho, log, và cây làm việc. Tách thành hàm riêng để bài kiểm
+   thử so được hai đường với nhau trên cùng một chuỗi đầu vào — hai đường
+   đọc cùng một kho mà ra hai kết quả khác nhau là thứ không được phép. */
+function fromScan(pre) {
+  if (!pre || pre.isRepo !== true) return null;
+  return {
+    info: {
+      branch: String(pre.branch || '').trim() || 'không rõ nhánh',
+      remote: String(pre.remote || '').trim()
+    },
+    read: pre.logOk
+      ? { ok: true, commits: parseLog(pre.log || ''), empty: !!pre.logEmpty }
+      : { ok: false, commits: [], empty: false },
+    tree: parseWorkingTree(pre.statusOk ? pre.status : null)
+  };
 }
 
 // Tự tìm thêm kho mã trong các thư mục gốc, có giới hạn độ sâu và số lượng.
@@ -203,6 +298,17 @@ function collect(config, opts) {
   let scanned = 0;
   let incomplete = false;
 
+  /* Quét sẵn TẤT CẢ các kho cùng lúc, rồi mới xử lý lần lượt. `null` nghĩa
+     là không thử quét song song (bài kiểm thử, hoặc chỉ một kho) — lúc đó
+     vòng lặp dưới đọc thẳng bằng git như trước. `opts.scan` là khe cắm để
+     bài kiểm thử chạy hết đường quét sẵn mà không sinh tiến trình nào,
+     cùng lối `opts.runGit`. */
+  const scan = opts && opts.scan ? opts.scan(repos) : scanAll(repos, opts);
+  if (scan && scan.error) {
+    notes.push('Git: quét song song không chạy được (' + scan.error + ') — đã quét lần lượt, chậm hơn.');
+  }
+  const prefetched = scan ? scan.map : null;
+
   for (const repo of repos) {
     // Đường dẫn không tồn tại (ổ mạng rút ra, thư mục đổi tên) là đọc hụt,
     // không phải "kho rỗng" — phải giữ nguyên dữ liệu git cũ.
@@ -211,14 +317,20 @@ function collect(config, opts) {
       incomplete = true;
       continue;
     }
-    const info = repoInfo(repo, runGit);
+
+    /* Bản ghi quét sẵn và đường tuần tự phải cho ra CÙNG kết quả — đó là
+       điều bài kiểm thử canh. Kho nào không có trong bản quét (quét hỏng,
+       hoặc nó chưa tồn tại lúc quét) thì rơi về đường tuần tự. */
+    const pre = prefetched ? prefetched.get(repo) : null;
+    const fromPre = fromScan(pre);
+    const info = fromPre ? fromPre.info : repoInfo(repo, runGit);
     if (!info) {
       notes.push('Git: bỏ qua ' + repo + ' — không phải kho git. Thêm đường dẫn kho của huynh vào devtrace.config.json → sources.git.repos, hoặc bật sources.git.autoDiscover.');
       continue;
     }
     scanned++;
 
-    const read = readCommitsDetailed(repo, runGit);
+    const read = fromPre ? fromPre.read : readCommitsDetailed(repo, runGit);
     if (!read.ok) incomplete = true;
     const all = read.commits;
     const commits = all.filter((c) => matchesAuthor(c, authors));
@@ -239,7 +351,7 @@ function collect(config, opts) {
       });
     }
 
-    const tree = workingTree(repo, runGit);
+    const tree = fromPre ? fromPre.tree : workingTree(repo, runGit);
     if (tree == null) {
       incomplete = true;
     } else if (tree.total > 0) {
@@ -267,5 +379,6 @@ function collect(config, opts) {
 
 module.exports = {
   collect, discoverRepos, repoInfo, readCommits, readCommitsDetailed, workingTree,
-  detectAuthors, matchesAuthor, parseLog, git, gitFull, EMPTY_REPO_RE
+  detectAuthors, matchesAuthor, parseLog, git, gitFull, EMPTY_REPO_RE,
+  parseWorkingTree, fromScan, scanAll, logArgs, BRANCH_ARGS, REMOTE_ARGS, STATUS_ARGS
 };
