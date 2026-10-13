@@ -114,6 +114,73 @@ function windowOptions(desk) {
   };
 }
 
+/* --- Cửa sổ ghi nhanh ------------------------------------------------
+
+   Đây là chỗ DUY NHẤT trong DevTrace giành một phím của cả hệ điều hành.
+   Đổi lại nó phải xứng: bấm Ctrl + Alt + N ở bất kỳ đâu — kể cả khi
+   DevTrace đang thu dưới khay, kể cả khi đang ở trong một trình soạn thảo
+   khác — là gõ được một dòng rồi Enter, xong. Không mở ứng dụng, không
+   chọn dự án, không quyết gì.
+
+   Cửa sổ này nạp từ chính máy chủ DevTrace (capture.html), không mở từ
+   đĩa: cùng nguồn gốc nên bảng màu đang chọn đi theo, và trang gửi thẳng
+   vào API được mà không phải mở CORS. */
+
+const CAPTURE_ACCELERATOR = 'Control+Alt+N';
+const CAPTURE_WIDTH = 620;
+const CAPTURE_HEIGHT = 152;
+
+function captureUrl(desk) {
+  return Launch.baseUrl(desk) + 'capture.html';
+}
+
+function captureWindowOptions() {
+  return {
+    width: CAPTURE_WIDTH,
+    height: CAPTURE_HEIGHT,
+    /* Không viền, không nút, không nằm trên taskbar: đây là một cử chỉ,
+       không phải một cửa sổ làm việc. Thanh tiêu đề của Windows chiếm gần
+       một phần tư chiều cao mà không mang lại gì cho một ô nhập. */
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    backgroundColor: '#f5f6f8',
+    icon: ICON_FILE,
+    title: 'Ghi nhanh — DevTrace',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  };
+}
+
+/* Chỗ hiện ra: giữa bề ngang, và cao hơn giữa bề dọc một chút. Cửa sổ ghi
+   nhanh là thứ liếc qua rồi đi, nên nó thuộc về nửa trên của màn hình —
+   ngay tầm mắt — chứ không phải chính giữa, nơi mọi hộp thoại "phải đọc"
+   vẫn nằm. */
+function capturePosition(work) {
+  const area = work || { x: 0, y: 0, width: 1280, height: 800 };
+  return {
+    x: Math.round(area.x + (area.width - CAPTURE_WIDTH) / 2),
+    y: Math.round(area.y + Math.max(0, area.height * 0.22))
+  };
+}
+
+/* `globalShortcut.register` trả về false khi phần mềm khác đã giữ tổ hợp
+   đó — và im lặng bỏ qua thì huynh ngồi bấm mãi một phím không có gì xảy
+   ra, rồi kết luận là phím tắt hỏng. Nói thẳng, và nói luôn còn đường nào
+   khác để ghi nhanh. */
+function captureHotkeyNote(registered, accelerator) {
+  if (registered) return null;
+  return 'Không giành được phím tắt ' + (accelerator || CAPTURE_ACCELERATOR) + ' — phần mềm khác đang giữ tổ hợp này.\n' +
+    'Ghi nhanh vẫn dùng được từ ô "Hộp thư đến" ở màn Hôm nay.';
+}
+
 /* Tiến trình con phải chạy bằng Node thật, không phải Electron: trong
    Electron, process.execPath là electron.exe. Đặt ELECTRON_RUN_AS_NODE=1
    thì chính electron.exe chạy như node thường — không phải đi tìm node.exe
@@ -184,6 +251,9 @@ function trayTemplate(handlers, options) {
   const opts = options || {};
   return [
     { label: 'Mở DevTrace', click: h.open },
+    // Đứng ngay dưới "Mở DevTrace" vì đây là việc hay dùng nhất, và vì khay
+    // là chỗ duy nhất nói cho huynh biết phím tắt này tồn tại.
+    { label: 'Ghi nhanh một việc  (Ctrl + Alt + N)', click: h.capture },
     { label: 'Thu thập dấu vết ngay', click: h.collect },
     { label: 'Mở bằng trình duyệt', click: h.browser },
     { type: 'separator' },
@@ -272,6 +342,57 @@ function createTray(handlers, options) {
   return tray;
 }
 
+function createCaptureWindow(desk, state) {
+  const win = new E.BrowserWindow(captureWindowOptions());
+
+  /* Nút X và window.close() từ trong trang đều đi qua đây. KHÔNG đóng thật:
+     cửa sổ được giữ lại và chỉ thu xuống, để lần bấm phím tắt sau hiện ra
+     tức thì. Dựng lại một BrowserWindow mất vài trăm mili giây, và một phím
+     tắt ghi nhanh mà chậm thì không ai dùng — chậm là hỏng. */
+  win.on('close', (event) => {
+    if (state.quitting) return;
+    event.preventDefault();
+    win.hide();
+  });
+
+  // Cửa sổ này chỉ có một ô nhập. Nạp hỏng thì phím tắt mở ra một khung
+  // trắng, nên phải nói ra và phải bỏ nó đi để lần sau dựng lại từ đầu.
+  win.webContents.on('did-fail-load', (event, code, description, failedUrl, isMainFrame) => {
+    if (isMainFrame === false) return;
+    process.stdout.write('Không nạp được cửa sổ ghi nhanh ' + failedUrl + ' (' + code + ' ' + description + ')\n');
+    state.capture = null;
+    win.destroy();
+  });
+
+  win.loadURL(captureUrl(desk));
+  return win;
+}
+
+/* Hiện cửa sổ ghi nhanh. Dựng nếu chưa có, đặt lại chỗ, rồi đưa lên trước.
+   Ô nhập tự đặt con trỏ và chọn sẵn chữ cũ — xem web/capture.js; việc đó
+   thuộc về trang, không phải ở đây. */
+function showCapture(desk, state) {
+  if (!state.capture) state.capture = createCaptureWindow(desk, state);
+  const win = state.capture;
+  try {
+    const at = capturePosition(E.screen.getPrimaryDisplay().workArea);
+    win.setPosition(at.x, at.y);
+  } catch (error) { /* không đặt được chỗ thì để Windows tự chọn */ }
+  win.show();
+  win.focus();
+  return win;
+}
+
+/* Đăng ký phím tắt, trả về true/false — chỗ gọi phải nói ra khi là false,
+   xem captureHotkeyNote ngay trên. */
+function registerCaptureHotkey(accelerator, onFire) {
+  try {
+    return E.globalShortcut.register(accelerator, onFire) === true;
+  } catch (error) {
+    return false;
+  }
+}
+
 // Thu thập ở hậu trường rồi báo bằng bong bóng khay — nhưng chỉ khi cửa sổ
 // đang ẩn hoặc không được chọn, vì lúc đó người dùng mới cần biết.
 async function collectNow(state, desk) {
@@ -307,7 +428,7 @@ async function start() {
   const desk = Launch.desktopConfig(config);
   const targetUrl = Launch.baseUrl(desk);
 
-  const state = { window: null, tray: null, quitting: false, ownsServer: false, notified: false };
+  const state = { window: null, tray: null, capture: null, quitting: false, ownsServer: false, notified: false };
 
   if (!requestSingleInstance(app, () => revealWindow(state.window))) return;
 
@@ -315,6 +436,13 @@ async function start() {
   // Cửa sổ đóng không phải là thoát: biểu tượng còn ở khay. Không có dòng
   // này thì Windows coi như hết việc và tắt cả ứng dụng.
   app.on('window-all-closed', () => { /* ở lại khay */ });
+
+  /* Nhả phím tắt của hệ điều hành khi thoát. Không nhả thì tổ hợp đó nằm
+     lại trong tay một tiến trình đã chết, và lần mở sau — hoặc một phần mềm
+     khác — không giành được nó nữa. */
+  app.on('will-quit', () => {
+    try { E.globalShortcut.unregisterAll(); } catch (error) { /* thôi */ }
+  });
 
   await app.whenReady();
 
@@ -343,6 +471,7 @@ async function start() {
 
   const handlers = {
     open: () => revealWindow(state.window),
+    capture: () => { showCapture(desk, state); },
     collect: () => { collectNow(state, desk).catch(() => { /* đã báo qua bong bóng */ }); },
     browser: () => E.shell.openExternal(targetUrl),
     quit: () => { quitApp(); }
@@ -350,6 +479,20 @@ async function start() {
 
   state.window = createWindow(desk, targetUrl, state);
   state.tray = createTray(handlers, { ownsServer: state.ownsServer });
+
+  /* Cửa sổ ghi nhanh được DỰNG SẴN rồi giấu đi, không đợi tới lần bấm phím
+     tắt đầu tiên. Dựng nó tốn vài trăm mili giây tải trang, và nếu làm lúc
+     đó thì cú bấm đầu tiên nào cũng mở ra một khung trắng đang vẽ dở. */
+  state.capture = createCaptureWindow(desk, state);
+
+  const gotHotkey = registerCaptureHotkey(CAPTURE_ACCELERATOR, () => { showCapture(desk, state); });
+  const hotkeyNote = captureHotkeyNote(gotHotkey, CAPTURE_ACCELERATOR);
+  if (hotkeyNote) {
+    process.stdout.write(hotkeyNote + '\n');
+    // Cửa sổ dòng lệnh thường không ai nhìn (ứng dụng mở từ lối tắt ngoài màn
+    // hình), nên câu này phải đi tới chỗ huynh thật sự thấy.
+    try { state.tray.displayBalloon({ title: 'DevTrace — phím tắt ghi nhanh', content: hotkeyNote }); } catch (error) { /* thôi */ }
+  }
 
   // Nói ra khi cửa sổ đã sẵn sàng, để `npm run desktop` trong cửa sổ dòng
   // lệnh có cái mà đọc thay vì ngồi đoán xem ứng dụng đã lên chưa.
@@ -396,5 +539,12 @@ module.exports = {
   revealWindow: revealWindow,
   requestSingleInstance: requestSingleInstance,
   collectNow: collectNow,
+  CAPTURE_ACCELERATOR: CAPTURE_ACCELERATOR,
+  CAPTURE_WIDTH: CAPTURE_WIDTH,
+  CAPTURE_HEIGHT: CAPTURE_HEIGHT,
+  captureUrl: captureUrl,
+  captureWindowOptions: captureWindowOptions,
+  capturePosition: capturePosition,
+  captureHotkeyNote: captureHotkeyNote,
   start: start
 };

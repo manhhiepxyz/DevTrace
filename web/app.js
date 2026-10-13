@@ -351,6 +351,13 @@
     return found;
   }
 
+  function inboxById(id) {
+    var found = null;
+    var part = plansData();
+    ((part && part.inbox) || []).forEach(function (i) { if (i && i.id === id) found = i; });
+    return found;
+  }
+
   /* Danh sách dự án huynh tự khai, chép sang dạng tối giản. Gửi lại nguyên
      đối tượng nhận từ máy chủ là gửi kèm cả trường chỉ có nghĩa phía máy
      chủ, rồi lần lưu sau chúng nằm lại trong tệp cấu hình như dữ liệu thừa. */
@@ -846,6 +853,51 @@
       postPlan('/api/plans/task', { action: 'occur-toggle', id: value, day: state.day, done: !done });
     },
 
+    /* ---- Hộp thư đến ----
+
+       Ba thao tác dưới đây cố tình KHÔNG báo "đã lưu". Mục hiện ra (hoặc
+       biến mất) ngay trong danh sách nằm cùng màn hình — đó đã là phản hồi
+       rồi. Thêm một cái toast cho mỗi lần gõ là biến việc ghi ba giây thành
+       việc phải đọc thêm một câu. */
+    'inbox-add': function () {
+      var node = $('#inboxText');
+      var text = node ? String(node.value || '') : '';
+      if (!text.trim()) { toast('Chưa gõ gì để ghi.', 'bad'); return; }
+      /* Ô nhập bị vẽ lại sau mỗi lần ghi, nên con trỏ phải được trả về chỗ
+         cũ. Không trả thì ghi hai mục liên tiếp là phải bấm chuột lại — và
+         đó đúng là lúc huynh đang dỡ hàng trong đầu ra. */
+      postPlan('/api/plans/inbox', { action: 'add', text: text, source: 'app' })
+        .then(function () {
+          var again = $('#inboxText');
+          if (again) again.focus();
+        });
+    },
+    'inbox-edit': function (value) {
+      var item = inboxById(value);
+      if (!item) return;
+      openModal('Sửa mục trong hộp thư đến',
+        '<div class="field"><label for="inboxEdit">Chữ</label>' +
+        '<input type="text" id="inboxEdit" maxlength="300" value="' + esc(item.text) + '"></div>' +
+        '<div class="spread"><span class="muted small">Sửa chữ thì vẫn chỉ là chữ — ' +
+        'nó chưa thành việc cho tới khi phân loại.</span>' +
+        '<button class="btn btn-primary" data-action="inbox-edit-save" data-value="' + esc(item.id) + '">Lưu</button></div>');
+      var box = $('#inboxEdit');
+      if (box) { box.focus(); box.select(); }
+    },
+    'inbox-edit-save': function (value) {
+      postPlan('/api/plans/inbox', { action: 'edit', id: value, text: val('inboxEdit') })
+        .then(function (out) { if (out) closeModal(); });
+    },
+    'inbox-delete': function (value) {
+      postPlan('/api/plans/inbox', { action: 'delete', id: value });
+    },
+    /* Phân loại là MỘT cú bấm: mục biến thành việc ở đúng tầm nhìn vừa bấm,
+       và rời hộp thư đến trong cùng một lần ghi ở máy chủ. */
+    'inbox-promote': function (value, node) {
+      var horizon = (node && node.getAttribute('data-horizon')) || 'day';
+      postPlan('/api/plans/inbox', { action: 'promote', id: value, horizon: horizon });
+    },
+
     /* ---- Thời khoá biểu ---- */
 
     /* Ô trống của bảng tuần gửi `new:<thứ>:<bắt đầu>:<kết thúc>` — nó biết
@@ -1310,6 +1362,14 @@
 
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closeModal();
+    /* Enter trong ô ghi nhanh: ghi luôn. Đó là TOÀN BỘ điểm của cái ô này —
+       gõ, Enter, xong. Bắt bấm nút thì nó thành một biểu mẫu như mọi biểu
+       mẫu khác, và ghi một việc lại đắt hơn mở Notepad. */
+    if (event.key === 'Enter' && event.target
+      && event.target.matches && event.target.matches('[data-role="inbox-text"]')) {
+      event.preventDefault();
+      actions['inbox-add'](null, event.target);
+    }
   });
 
   $('#modalRoot').addEventListener('click', function (event) {

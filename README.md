@@ -70,6 +70,11 @@ hệ thống, chỉ cho một bản chạy (mở lần thứ hai thì đưa cử
 cửa sổ thì thu xuống khay chứ không thoát. Nó dùng lại đúng phần bắt-máy-chủ của
 `desktop/launch.js`, nên hai đường không lệch nhau.
 
+Đây cũng là lối duy nhất có **Ctrl + Alt + N** — phím tắt ghi nhanh một việc vào hộp thư
+đến, dùng được từ bất kỳ đâu kể cả khi DevTrace đã thu xuống khay. Phím tắt thuộc về cả hệ
+điều hành, nên nếu phần mềm khác đang giữ tổ hợp đó thì DevTrace **nói thẳng ra** bằng một
+bong bóng ở khay, chứ không im lặng để huynh bấm mãi một phím không có gì xảy ra.
+
 Electron là **devDependency duy nhất** của dự án, và chỉ đường này cần tới nó:
 `npm test` và `node server.js` chạy được trên máy chưa cài Electron.
 
@@ -103,7 +108,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 632 kiểm tra
+npm test            # chạy 692 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -113,7 +118,7 @@ npm run icon        # vẽ lại biểu tượng devtrace.ico
 
 | Màn hình | Việc nó làm |
 | --- | --- |
-| **Hôm nay** | Bảng tuần ở trên cùng, bảng bốn tầm nhìn nhiệm vụ, ba câu hỏi dựng từ bằng chứng, khung nhật ký, thẻ hộp thư, và một danh sách cảnh báo duy nhất. |
+| **Hôm nay** | Hộp thư đến ở trên cùng, bảng tuần, bảng bốn tầm nhìn nhiệm vụ, ba câu hỏi dựng từ bằng chứng, khung nhật ký, thẻ hộp thư, và một danh sách cảnh báo duy nhất. |
 | **Dòng thời gian** | Sự kiện thô, lọc theo nguồn và tìm kiếm. Đây là chỗ kiểm chứng mọi kết luận. |
 | **Dự án** | Bảng bằng chứng gộp theo dự án trong 7/14/30/90 ngày, kèm sức khoẻ kho mã. |
 | **Lịch sử** | Lưới nhiệt theo ngày để nhìn nhịp làm việc dài hạn. |
@@ -174,6 +179,43 @@ vì mượn là nói sai.
 
 Con số lệch là **ước lượng**, không phải đo: ngưỡng gộp 25 phút và ngưỡng nghỉ 8 phút
 khiến một buổi có nghỉ giữa bị tách khúc.
+
+### Hộp thư đến, và phím tắt ghi nhanh
+
+Một việc vừa chợt nghĩ ra không đáng phải mở ứng dụng, chọn tầm nhìn, chọn dự án, rồi bấm
+lưu. Đó là cách để nó không bao giờ được ghi lại. Nên có hai cửa, và cả hai đều dẫn vào cùng
+một chỗ:
+
+| Cửa | Dùng khi nào |
+| --- | --- |
+| Ô **Hộp thư đến** ở đầu màn Hôm nay | Đang mở DevTrace |
+| **Ctrl + Alt + N** ở bất kỳ đâu | Đang ở trong trình soạn thảo, terminal, hay game |
+
+Bấm phím tắt là một cửa sổ nhỏ hiện ra ngay tầm mắt, **không viền, không nằm trên taskbar**.
+Gõ một dòng, bấm Enter, cửa sổ biến mất. Không phải quyết gì cả — kể cả quyết nó thuộc về
+đâu. Phím tắt hoạt động cả khi DevTrace đã thu xuống khay, và cũng có mặt trong menu chuột
+phải ở khay cho ai không nhớ phím.
+
+Mục nằm trong hộp thư đến **chưa phải là việc**. Nó chỉ thành việc khi huynh bấm một trong
+ba nút phân loại — *Hôm nay*, *Tuần này*, *Mục tiêu*. Việc cố định không có nút ở đây vì nó
+cần một kiểu lặp, mà lúc dọn một dòng vừa gõ thì chưa có kiểu lặp nào để chọn.
+
+Ba chỗ đáng nói trước:
+
+- **Phân loại là một lần ghi duy nhất.** Hoặc được cả hai — có việc, mục rời hộp thư — hoặc
+  không được gì. Ghi hỏng giữa chừng mà đẻ ra một việc trùng, hoặc một mục đã biến mất, thì
+  huynh mất chữ mà không có gì để lần theo.
+- **Ghi hỏng thì câu huynh gõ ở lại nguyên trong ô**, kèm lý do máy chủ đưa ra. Cửa sổ chỉ
+  đóng khi đã ghi được thật. Bấm Esc để đóng ngang cũng không xoá gì — lần sau mở lại câu cũ
+  vẫn còn, và được chọn sẵn để gõ tiếp là thay ngay.
+- **Đây không phải hộp thư điện tử.** Thẻ *Hộp thư đến* (收) là chữ huynh tự viết; thẻ *Hộp
+  thư* (郵) ở cột phải là email của người khác. Hai chữ gần giống nhau vì tiếng Việt gọi cả
+  hai như vậy, nhưng luật của chúng ngược nhau: chữ huynh viết thì đi cùng gói bằng chứng
+  tới AI, chữ người khác viết thì không bao giờ.
+
+Hộp thư đến nằm trong chính tệp việc (`data/plans/tasks.json`), không phải một tệp riêng —
+nên nó đi cùng bản sao lưu, và không bao giờ bị hạn lưu trữ xoá. Trần là 500 mục: một hộp
+thư đến không bao giờ được dọn thì ba tuần sau nó thành một danh sách việc thứ hai.
 
 ## Hộp thư — và một ranh giới không được vượt
 
@@ -330,6 +372,7 @@ tra luôn điều này.
 
 ```
 index.html            Trang chính
+capture.html          Cửa sổ ghi nhanh (Ctrl + Alt + N) — cùng nguồn gốc với máy chủ
 styles.css            Toàn bộ giao diện (ba bảng màu, chỉ dùng token)
 server.js             Máy chủ + API (Node thuần)
 devtrace.config.json  Cấu hình (tự sinh ở lần chạy đầu)
@@ -356,12 +399,13 @@ web/
   charts.js           Biểu đồ SVG viết tay
   views.js            Sinh HTML cho sáu màn hình
   app.js              Định tuyến, gọi API, bắt sự kiện
+  capture.js          Cửa sổ ghi nhanh: gửi một dòng vào hộp thư đến
 tools/
   smoke-test.js       Kiểm tra tự động toàn bộ logic
   find-repos.js       Dò các kho git trên máy, in ra khối dán vào cấu hình
 desktop/
   DevTrace.vbs        Nhấp đúp là mở; cầu nối mỏng, lưu bằng UTF-16
-  main.js             Ứng dụng Electron: một bản chạy, khay hệ thống, thu xuống khay
+  main.js             Ứng dụng Electron: một bản chạy, khay hệ thống, phím tắt ghi nhanh
   launch.js           Kiểm cổng, bật máy chủ nền, mở cửa sổ --app
   stop.js             Tắt máy chủ, kiểm tra danh tính trước khi tắt
   shortcut.js         Tạo và gỡ lối tắt qua PowerShell COM
@@ -433,7 +477,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-632 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+692 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra
@@ -460,9 +504,15 @@ Ba nhóm mới, và mỗi nhóm kiểm một điều mà lời hứa suông khô
   bao giờ `require('tls')` — chỉ `app/mail-fetch.js` được.
 - **Sức khoẻ kho** — chạy hoàn toàn trên runner git giả, cảnh báo git **vắng** ở bản tổng hợp
   của ngày cũ và **có** ở hôm nay, và quét tôn trọng `healthMaxRepos`.
+- **Cửa sổ ghi nhanh** — `web/capture.js` được chạy thật trong một DOM giả, với `fetch` giả
+  ghi lại từng lời gọi: gõ rỗng thì **không gọi mạng và không đóng**, gõ xong thì gọi **đúng
+  một lần** vào `/api/plans/inbox` với chữ đã gộp khoảng trắng rồi mới xoá ô và đóng, máy chủ
+  chết hoặc từ chối thì **chữ còn nguyên, ô nhập mở lại**, và `Esc` đóng mà **không** xoá gì.
+  Kèm một phép soi mã nguồn: chỗ xoá ô nhập phải nằm **trước** nhánh báo lỗi.
 
 Bài kiểm thử cố tình **không mở cửa sổ nào và không chạy tiến trình nào** — nó soi phần
-suy nghĩ của bộ khởi động, chứ không bật ứng dụng lên làm phiền người đang ngồi trước máy.
+suy nghĩ của bộ khởi động và chạy giao diện trong DOM giả, chứ không bật ứng dụng lên làm
+phiền người đang ngồi trước máy.
 
 ## Giới hạn thật
 

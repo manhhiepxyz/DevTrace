@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Ghi nhanh — DevTrace</title>
+<!-- Không có thẻ nào để trình duyệt lập chỉ mục hay chia sẻ: trang này chỉ
+     tồn tại trong một cửa sổ không viền, mở bằng Ctrl + Alt + N. -->
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="stylesheet" href="styles.css">
+</head>
+<!-- Trang này được MÁY CHỦ của DevTrace phục vụ, không phải mở từ đĩa. Đó là
+     chủ ý: cùng nguồn gốc với ứng dụng nên nó dùng chung localStorage (bảng
+     màu đang chọn đi theo), dùng chung styles.css, và gửi được thẳng vào
+     /api/plans/inbox mà không phải mở CORS cho máy chủ. -->
+<body class="capture-body" data-theme="trang">
+<script>
+/* Đọc bảng màu TRƯỚC khi phần còn lại của trang được vẽ. Việc này nằm ở đây
+   chứ không nằm trong web/capture.js vì tệp kia nằm cuối thân trang: để nó
+   làm thì cửa sổ hiện ra một nháy màu sáng rồi mới đổi sang màu tối, và với
+   một cửa sổ chỉ cao hơn trăm pixel thì cái nháy đó là tất cả những gì người
+   dùng kịp thấy. */
+try {
+  document.body.setAttribute('data-theme', localStorage.getItem('devtrace.theme') || 'trang');
+} catch (e) { /* không đọc được thì ở lại bảng màu sáng */ }
+</script>
+
+<form class="capture-form" id="captureForm" autocomplete="off">
+  <input type="text" class="capture-input" id="captureText" data-role="capture-text"
+    maxlength="300" placeholder="Ghi nhanh một việc rồi bấm Enter…" aria-label="Nội dung cần ghi">
+  <div class="capture-foot">
+    <span class="capture-hint">Ghi vào hộp thư đến · <kbd>Esc</kbd> để đóng</span>
+    <span class="capture-msg" id="captureMsg" role="status"></span>
+  </div>
+</form>
+
+<script src="web/capture.js"></script>
+</body>
+</html>

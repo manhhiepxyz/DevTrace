@@ -1107,6 +1107,40 @@ check('index.html nạp đủ ba tệp kịch bản', grab(htmlSrc, /<script src
 check('index.html nạp bảng kiểu', /<link rel="stylesheet" href="styles\.css">/.test(htmlSrc));
 check('index.html có đủ điểm gắn của giao diện', ['id="nav"', 'id="view"', 'id="modalRoot"', 'id="toastRoot"', 'id="viewTitle"'].every((needle) => htmlSrc.indexOf(needle) !== -1));
 
+/* ---- Trang ghi nhanh (capture.html) ----
+
+   Trang này là cửa thứ hai vào cùng một hộp thư đến. Nó nạp CHUNG
+   styles.css với ứng dụng — đó là cách duy nhất để bảng màu đang chọn đi
+   theo mà không phải chép bộ token sang một tệp thứ hai rồi để chúng lệch
+   nhau. Ba phép kiểm dưới khoá lại đúng ba mối nối đó. */
+const captureHtmlSrc = fs.readFileSync(path.join(ROOT, 'capture.html'), 'utf8');
+const captureJsSrc = fs.readFileSync(path.join(ROOT, 'web', 'capture.js'), 'utf8');
+
+check('trang ghi nhanh dùng chung bảng kiểu với ứng dụng',
+  captureHtmlSrc.indexOf('<link rel="stylesheet" href="styles.css">') !== -1);
+check('trang ghi nhanh nạp mã của nó', captureHtmlSrc.indexOf('<script src="web/capture.js"></script>') !== -1);
+check('trang ghi nhanh có đủ ô nhập, biểu mẫu và chỗ báo',
+  ['id="captureForm"', 'id="captureText"', 'id="captureMsg"'].every((needle) => captureHtmlSrc.indexOf(needle) !== -1));
+check('trang ghi nhanh đọc bảng màu trước khi vẽ, không nháy màu',
+  captureHtmlSrc.indexOf("document.body.setAttribute('data-theme'") !== -1);
+
+const captureApis = [...new Set(grab(captureJsSrc, /'(\/api\/[a-z\/]*)'/g))];
+check('trang ghi nhanh có gọi API', captureApis.length >= 1, captureApis);
+check('trang ghi nhanh gọi API có thật ở máy chủ',
+  captureApis.every((p) => serverFlat.indexOf(p) !== -1), captureApis);
+
+/* Câu huynh gõ không được xoá khi ghi hỏng — đó là lời hứa quan trọng nhất
+   của cả tệp, và là thứ dễ bị phá nhất khi ai đó "dọn lại cho gọn". Đếm
+   thẳng: cả tệp chỉ được có ĐÚNG MỘT chỗ xoá ô nhập, và nó phải nằm trước
+   nhánh .catch. Đặt sai chỗ thì ghi hỏng là mất câu, im lặng. */
+const clearAt = captureJsSrc.indexOf("input.value = ''");
+check('trang ghi nhanh chỉ xoá ô nhập ở đúng một chỗ',
+  clearAt !== -1 && captureJsSrc.indexOf("input.value = ''", clearAt + 1) === -1, clearAt);
+const failAt = captureJsSrc.indexOf('Chưa ghi được:');
+check('nhánh ghi hỏng không xoá ô nhập',
+  failAt !== -1 && clearAt !== -1 && clearAt < failAt
+  && captureJsSrc.slice(failAt).indexOf("input.value = ''") === -1, [clearAt, failAt]);
+
 const requiredClasses = ['card', 'stat', 'badge', 'btn', 'table', 'question', 'timeline', 'block-card', 'meter', 'journal-text', 'source-row', 'empty', 'grid', 'toast', 'modal', 'hbar',
   'alert', 'alert-list', 'disclosure', 'disclosure-body', 'settings-actions',
   // Kế hoạch: bảng tuần, bảng bốn tầm nhìn, dải đợt, thẻ hộp thư, chip kho.
@@ -1117,6 +1151,10 @@ const requiredClasses = ['card', 'stat', 'badge', 'btn', 'table', 'question', 't
   'slot-goal-1', 'slot-goal-2', 'slot-goal-3', 'slot-goal-4', 'slot-goal-5',
   'slot-goal-none', 'slot-goal-many', 'slot-detail-row', 'slot-detail-open',
   'slot-principle-row', 'slot-principle-text',
+  // Hộp thư đến, và cửa sổ ghi nhanh mở vào cùng chỗ đó.
+  'inbox-capture', 'inbox-list', 'inbox-item', 'inbox-text', 'inbox-actions', 'inbox-empty',
+  'capture-body', 'capture-form', 'capture-input', 'capture-foot', 'capture-hint',
+  'capture-msg', 'capture-bad',
   'board', 'board-col', 'task', 'task-done', 'sprint-band', 'mail-list', 'mail-row', 'repo-chip'];
 const missingClasses = requiredClasses.filter((name) => cssSrc.indexOf('.' + name) === -1);
 check('bảng kiểu có đủ lớp giao diện dùng tới', missingClasses.length === 0, missingClasses);
@@ -1206,6 +1244,8 @@ check('máy chủ chặn dữ liệu cá nhân', !allowed('/data/events/2026-10-
 check('máy chủ chặn tệp cấu hình', !allowed('/devtrace.config.json'));
 check('máy chủ chặn đường dẫn thoát ra ngoài', !allowed('/../secret.txt'));
 check('máy chủ cho phép biểu tượng của cửa sổ ứng dụng', allowed('/favicon.ico'));
+check('máy chủ cho phép trang ghi nhanh', allowed('/capture.html'));
+check('máy chủ cho phép mã của trang ghi nhanh', allowed('/web/capture.js'));
 check('máy chủ không mở bừa thư mục desktop', !allowed('/desktop/shortcut.js') && !allowed('/desktop/devtrace.ico'));
 check('biểu tượng của cửa sổ lấy từ devtrace.ico', serverSrc.indexOf("'/favicon.ico': path.join('desktop', 'devtrace.ico')") !== -1);
 check('trang chính trỏ tới biểu tượng thật', htmlSrc.indexOf('<link rel="icon" href="/favicon.ico"') !== -1);
@@ -1535,6 +1575,42 @@ check('không cho trang web gọi thẳng hệ điều hành',
 check('cửa sổ có cỡ nhỏ nhất để giao diện không bị bóp méo',
   winOpts.minWidth >= 800 && winOpts.minHeight >= 500, [winOpts.minWidth, winOpts.minHeight]);
 
+/* --- Cửa sổ ghi nhanh (Ctrl + Alt + N) ------------------------------- */
+
+const capOpts = Desktop.captureWindowOptions();
+check('cửa sổ ghi nhanh không viền và không nằm trên taskbar',
+  capOpts.frame === false && capOpts.skipTaskbar === true, [capOpts.frame, capOpts.skipTaskbar]);
+check('cửa sổ ghi nhanh không cho trang gọi thẳng hệ điều hành',
+  capOpts.webPreferences.nodeIntegration === false
+  && capOpts.webPreferences.contextIsolation === true
+  && capOpts.webPreferences.sandbox === true, capOpts.webPreferences);
+check('cửa sổ ghi nhanh nạp từ máy chủ, không mở từ đĩa',
+  Desktop.captureUrl({ host: '127.0.0.1', port: 5173 }) === 'http://127.0.0.1:5173/capture.html',
+  Desktop.captureUrl({ host: '127.0.0.1', port: 5173 }));
+
+/* Chỗ hiện ra: giữa bề ngang, nửa trên bề dọc. Sai chỗ thì cửa sổ hiện ra
+   lệch hẳn sang một bên hoặc rơi xuống đáy màn hình — với một cửa sổ không
+   viền, không thanh tiêu đề, người dùng không có cách nào đoán nó vừa mở. */
+const at1080 = Desktop.capturePosition({ x: 0, y: 0, width: 1920, height: 1080 });
+check('cửa sổ ghi nhanh hiện giữa bề ngang màn hình',
+  at1080.x === Math.round((1920 - Desktop.CAPTURE_WIDTH) / 2), at1080);
+check('cửa sổ ghi nhanh hiện ở nửa trên màn hình',
+  at1080.y > 0 && at1080.y < 1080 / 2, at1080.y);
+/* Màn hình có thanh tác vụ và màn hình phụ bắt đầu ở toạ độ âm: chỗ hiện ra
+   phải cộng theo gốc của vùng làm việc, không phải theo gốc toạ độ. */
+const atLeft = Desktop.capturePosition({ x: -1920, y: 40, width: 1920, height: 1000 });
+check('cửa sổ ghi nhanh tính chỗ theo vùng làm việc, kể cả màn hình phụ',
+  atLeft.x < -900 && atLeft.y >= 40, atLeft);
+check('thiếu thông tin màn hình thì vẫn ra một chỗ hợp lý',
+  Desktop.capturePosition(null).x > 0 && Desktop.capturePosition(null).y >= 0, Desktop.capturePosition(null));
+
+check('giành được phím tắt thì không có gì phải báo',
+  Desktop.captureHotkeyNote(true, Desktop.CAPTURE_ACCELERATOR) === null);
+const hotkeyClash = Desktop.captureHotkeyNote(false, Desktop.CAPTURE_ACCELERATOR);
+check('không giành được phím tắt thì nói thẳng ra, không im lặng',
+  /Control\+Alt\+N/.test(hotkeyClash) && /phần mềm khác/.test(hotkeyClash), hotkeyClash);
+check('câu đó chỉ luôn đường ghi nhanh khác', /Hộp thư đến/.test(hotkeyClash), hotkeyClash);
+
 const childEnv = Desktop.nodeEnv({ PORT: '5173' });
 check('tiến trình con chạy electron.exe như node thật', childEnv.ELECTRON_RUN_AS_NODE === '1', childEnv);
 check('dựng biến môi trường cho tiến trình con không làm hỏng biến cũ',
@@ -1545,6 +1621,9 @@ check('không sửa vào biến môi trường gốc', originalEnv.ELECTRON_RUN_
 
 const trayItems = Desktop.trayTemplate({}, { ownsServer: true });
 check('khay hệ thống có nút mở lại cửa sổ', trayItems.some((i) => i.label === 'Mở DevTrace'));
+check('khay hệ thống có nút ghi nhanh kèm phím tắt của nó',
+  trayItems.some((i) => i.label.indexOf('Ghi nhanh một việc') === 0 && i.label.indexOf('Ctrl + Alt + N') !== -1),
+  trayItems.map((i) => i.label));
 check('khay hệ thống có nút thu thập ngay', trayItems.some((i) => i.label === 'Thu thập dấu vết ngay'));
 check('nút thoát nói rõ nó có tắt máy chủ hay không',
   trayItems.some((i) => i.label === 'Thoát DevTrace (dừng máy chủ)')
@@ -1553,11 +1632,12 @@ check('nút thoát nói rõ nó có tắt máy chủ hay không',
 check('nút trên khay gọi đúng hàm xử lý', (() => {
   const seen = [];
   const items = Desktop.trayTemplate({
-    open: () => seen.push('open'), collect: () => seen.push('collect'),
+    open: () => seen.push('open'), capture: () => seen.push('capture'),
+    collect: () => seen.push('collect'),
     browser: () => seen.push('browser'), quit: () => seen.push('quit')
   }, {});
   items.filter((i) => i.click).forEach((i) => i.click());
-  return seen.join() === 'open,collect,browser,quit';
+  return seen.join() === 'open,capture,collect,browser,quit';
 })());
 
 const hidingWindow = { hidden: 0, hide() { this.hidden++; } };
@@ -2414,6 +2494,123 @@ check('cảnh báo kế hoạch đi vào danh sách chung và sắp đúng mức
   }).map((w) => w.level + '/' + w.kind + '/' + w.weight);
 })());
 
+/* ---- Hộp thư đến: ghi nhanh, phân loại sau ----
+
+   Kho riêng, không dùng chung `planConfig`: mấy phép kiểm ngay trên đang đếm
+   việc và buổi trong kho đó, và một mục hộp thư đến chuyển thành việc sẽ làm
+   lệch những con số ấy — bài kiểm đỏ vì lý do của chính nó.
+
+   Điều quan trọng nhất ở đây là tính NGUYÊN TỬ của "chuyển thành việc": hoặc
+   được cả hai (có việc, mục rời hộp thư), hoặc không được gì. Ghi hỏng giữa
+   chừng mà đẻ ra một việc trùng, hoặc một mục đã biến mất, thì huynh mất chữ
+   mà không có gì để lần theo. */
+const inboxConfig = Object.assign({}, config, { dataDir: path.join(TEST_DIR, 'inbox-store') });
+
+check('ghi nhanh một dòng thì cắt khoảng trắng thừa, không cắt chữ',
+  (function () {
+    const made = Plans.applyInbox(inboxConfig, 'add', { text: '  gọi   khách\n về hợp đồng A  ' }, { now: PLAN_NOW });
+    return made.ok === true && made.item.text === 'gọi khách về hợp đồng A' && made.item.source === 'app';
+  })());
+check('ghi nhanh câu rỗng thì bị từ chối, không ghi gì',
+  (function () {
+    const before = Plans.view(inboxConfig, MON).inbox.length;
+    const tried = Plans.applyInbox(inboxConfig, 'add', { text: '   \n  ' }, { now: PLAN_NOW });
+    return tried.ok === false && !!tried.error && Plans.view(inboxConfig, MON).inbox.length === before;
+  })());
+check('mục ghi từ phím tắt tự khai nó tới từ phím tắt',
+  (function () {
+    const made = Plans.applyInbox(inboxConfig, 'add', { text: 'từ phím tắt', source: 'hotkey' }, { now: PLAN_NOW });
+    return made.ok === true && made.item.source === 'hotkey';
+  })());
+
+const inboxIds = () => Plans.view(inboxConfig, MON).inbox.map((i) => i.id);
+check('hộp thư đến trả theo thứ tự ghi vào, cũ trước',
+  inboxIds().join() === 'in-0001,in-0002', inboxIds());
+
+check('sửa chữ của một mục thì chữ đổi, mục vẫn ở nguyên chỗ',
+  (function () {
+    const id = inboxIds()[0];
+    const edited = Plans.applyInbox(inboxConfig, 'edit', { id: id, text: 'gọi khách về hợp đồng B' }, { now: PLAN_NOW });
+    return edited.ok === true && inboxIds()[0] === id
+      && Plans.view(inboxConfig, MON).inbox[0].text === 'gọi khách về hợp đồng B';
+  })());
+check('sửa một mục không có thật thì bị từ chối kèm lý do',
+  (function () {
+    const tried = Plans.applyInbox(inboxConfig, 'edit', { id: 'in-9999', text: 'x' }, { now: PLAN_NOW });
+    return tried.ok === false && !!tried.error;
+  })());
+
+/* Phép kiểm quan trọng nhất của nhóm này. */
+check('chuyển một mục thành việc: có việc, và mục rời khỏi hộp thư đến',
+  (function () {
+    const id = inboxIds()[1];
+    const before = inboxIds().length;
+    const made = Plans.applyInbox(inboxConfig, 'promote', { id: id, horizon: 'week' }, { now: PLAN_NOW });
+    if (made.ok !== true) return false;
+    const after = Plans.view(inboxConfig, MON);
+    return made.task.horizon === 'week'
+      && made.task.title === 'từ phím tắt'
+      && made.task.dueDay === Plans.weekStart(MON)
+      && after.inbox.length === before - 1
+      && after.inbox.every((i) => i.id !== id)
+      && after.board.week.some((t) => t.id === made.task.id);
+  })(), (function () {
+    return Plans.view(inboxConfig, MON).inbox.map((i) => i.text);
+  })());
+
+check('chuyển thành việc mà tầm nhìn sai thì KHÔNG mất mục nào',
+  (function () {
+    const id = inboxIds()[0];
+    const before = inboxIds().join();
+    const tried = Plans.applyInbox(inboxConfig, 'promote', { id: id, horizon: 'khong-co-that' }, { now: PLAN_NOW });
+    return tried.ok === false && !!tried.error && inboxIds().join() === before;
+  })(), inboxIds());
+
+check('xoá một mục thì mục biến mất, các mục khác còn nguyên',
+  (function () {
+    const id = inboxIds()[0];
+    const rest = inboxIds().slice(1);
+    const gone = Plans.applyInbox(inboxConfig, 'delete', { id: id }, { now: PLAN_NOW });
+    return gone.ok === true && inboxIds().join() === rest.join();
+  })(), inboxIds());
+check('thao tác hộp thư đến không rõ thì bị từ chối, không im lặng',
+  (function () {
+    const tried = Plans.applyInbox(inboxConfig, 'lam-dieu-la', {}, { now: PLAN_NOW });
+    return tried.ok === false && !!tried.error && /lam-dieu-la/.test(tried.error);
+  })());
+
+/* Ba nút phân loại trên giao diện và ba tầm nhìn kho lưu nhận phải là CÙNG
+   một bộ. Lệch nhau thì có một nút bấm vào là bị từ chối, hoặc một tầm nhìn
+   không có nút nào tới được — cả hai đều im lặng. */
+check('ba nút phân loại khớp đúng ba tầm nhìn kho lưu nhận',
+  (function () {
+    const decl = viewsSrc.match(/INBOX_TRIAGE = \[([\s\S]*?)\];/);
+    if (!decl) return false;
+    const onScreen = [...decl[1].matchAll(/\['([a-z]+)'/g)].map((m) => m[1]);
+    return onScreen.length === 3 && onScreen.join() === Plans.PROMOTE_HORIZONS.join();
+  })(), (viewsSrc.match(/INBOX_TRIAGE = \[([\s\S]*?)\];/) || [])[1]);
+
+/* Hộp thư đến là CHỮ HUYNH GÕ. Nó không được lẫn vào chỗ bằng chứng, và
+   không được lẫn vào bản xuất đã che — hai chỗ đó có luật riêng. */
+check('hộp thư đến nằm trong tệp việc, không nằm trong thư mục bằng chứng',
+  (function () {
+    const raw = fs.readFileSync(path.join(inboxConfig.dataDir, 'plans', 'tasks.json'), 'utf8');
+    const files = U.isDir(path.join(inboxConfig.dataDir, 'events'))
+      ? fs.readdirSync(path.join(inboxConfig.dataDir, 'events')) : [];
+    return raw.indexOf('inbox') !== -1 && files.length === 0;
+  })(), fs.existsSync(path.join(inboxConfig.dataDir, 'plans', 'tasks.json')));
+
+check('tệp việc hỏng thì hộp thư đến cũng từ chối ghi, không ghi đè',
+  (function () {
+    const dir = path.join(TEST_DIR, 'inbox-hong', 'plans');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tasks.json'), '{ hỏng', 'utf8');
+    const broken = Object.assign({}, config, { dataDir: path.join(TEST_DIR, 'inbox-hong') });
+    const tried = Plans.applyInbox(broken, 'add', { text: 'không được ghi' }, { now: PLAN_NOW });
+    return tried.ok === false && !!tried.error
+      && fs.readFileSync(path.join(dir, 'tasks.json'), 'utf8') === '{ hỏng';
+  })());
+
 /* =====================================================================
    [14] Sức khoẻ kho mã
 
@@ -2803,6 +3000,10 @@ const seedSlot = (payload) => Plans.applySlot(viewPlanConfig, 'save', payload);
 seedSlot({ weekday: 5, start: '09:00', end: '11:00', title: 'Buổi sáng', kind: 'deep' });
 seedSlot({ weekday: 2, start: '14:00', end: '16:00', title: 'Buổi thứ Ba', kind: 'admin' });
 Plans.applySprint(viewPlanConfig, 'start', { name: 'Đợt thử', startDay: '2026-11-16', endDay: '2026-11-29' });
+/* Một mục trong hộp thư đến, có chữ thật để soi. Để hộp rỗng thì mọi phép
+   kiểm "mục có hiện ra không" đều xanh một cách vô nghĩa. */
+const INBOX_TEXT = 'gọi khách về hợp đồng B';
+Plans.applyInbox(viewPlanConfig, 'add', { text: INBOX_TEXT, source: 'hotkey' });
 
 const plansView = Plans.view(viewPlanConfig, PLAN_DAY);
 
@@ -2873,8 +3074,7 @@ check('màn hình có dữ liệu kế hoạch không lộ undefined hay [object
   return name + ':' + (bad.join('+') || 'sạch');
 }));
 
-/* Bảng tuần hiện CẢ TUẦN, không phải ngày đang xem: buổi thứ Ba phải có mặt
-   dù hôm nay là thứ Sáu. Đây là phép kiểm ngược với dải chip cũ — bản cũ CẤM
+/* Bảng tuần hiện CẢ TUẦN, không phải ngày đang xem: buổi thứ Ba phải có mặt   dù hôm nay là thứ Sáu. Đây là phép kiểm ngược với dải chip cũ — bản cũ CẤM
    buổi thứ Ba xuất hiện, và cấm đúng theo thiết kế cũ. */
 check('bảng tuần hiện đủ bảy cột và cả buổi của thứ khác ngày đang xem', (function () {
   const html = Views.today.render(fullViewCtx);
@@ -2897,6 +3097,42 @@ check('cột mục tiêu của hàng lấy từ việc horizon=goal, và ô tr�
     && html.indexOf('data-value="new:3:09:00:11:00"') !== -1
     && html.indexOf('slot-empty') !== -1;
 })(), Views.today.render(fullViewCtx).match(/new:\d:\d\d:\d\d:\d\d:\d\d/g));
+
+/* Hộp thư đến đứng TRÊN bảng tuần, và đứng trên vì một lý do cụ thể: trên
+   màn Hôm nay, nó là thứ DUY NHẤT đang đợi huynh; mọi khối còn lại là thông
+   tin để đọc. Đặt nó dưới cùng thì mục ghi nhanh ba hôm trước nằm khuất dưới
+   ba cuộn giấy, và cả tính năng thành vô nghĩa. */
+check('màn Hôm nay đặt hộp thư đến TRÊN bảng tuần', (function () {
+  const html = Views.today.render(fullViewCtx);
+  const inboxAt = html.indexOf('Hộp thư đến');
+  const tableAt = html.indexOf('<table class="timetable"');
+  return inboxAt !== -1 && tableAt !== -1 && inboxAt < tableAt;
+})(), (function () {
+  const html = Views.today.render(fullViewCtx);
+  return { hop_thu: html.indexOf('Hộp thư đến'), bang_tuan: html.indexOf('<table class="timetable"') };
+})());
+
+check('mục trong hộp thư đến hiện ra kèm ba nút phân loại và nút xoá', (function () {
+  const html = Views.today.render(fullViewCtx);
+  const promotes = (html.match(/data-action="inbox-promote"/g) || []).length;
+  return html.indexOf(INBOX_TEXT) !== -1 && promotes === 3
+    && html.indexOf('data-action="inbox-delete"') !== -1
+    && html.indexOf('data-action="inbox-add"') !== -1
+    && html.indexOf('data-role="inbox-text"') !== -1;
+})(), (function () {
+  const html = Views.today.render(fullViewCtx);
+  return { chu: html.indexOf(INBOX_TEXT) !== -1, nut: (html.match(/data-action="inbox-promote"/g) || []).length };
+})());
+
+check('hộp thư đến rỗng thì chỉ chỗ ghi, không hiện danh sách rỗng', (function () {
+  const empty = Object.assign({}, fullViewCtx, {
+    data: Object.assign({}, fullViewCtx.data, {
+      plans: Object.assign({}, plansView, { inbox: [] })
+    })
+  });
+  const html = Views.today.render(empty);
+  return html.indexOf('class="inbox-list"') === -1 && html.indexOf('inbox-empty') !== -1;
+})());
 
 check('màn Hôm nay vẫn dựng được khi máy chủ CHƯA trả bảng tuần', (function () {
   const ctx = Object.assign({}, fullViewCtx, {
@@ -3596,6 +3832,138 @@ apiStub['/api/mail'] = {
 
 const booted = bootApp(apiStub);
 
+/* ---- Cửa sổ ghi nhanh: chạy THẬT trong DOM giả ----
+
+   web/capture.js chỉ có một lời hứa đáng kiểm, và nó là lời hứa dễ bị phá
+   nhất khi ai đó dọn lại mã cho gọn: GHI HỎNG THÌ CÂU HUYNH GÕ PHẢI CÒN
+   NGUYÊN TRONG Ô. Kiểm bằng cách soi mã nguồn là kiểm gián tiếp; ở đây nó
+   chạy thật, với một `fetch` hỏng thật và một `fetch` chạy được thật.
+
+   Dựng một DOM tí hon riêng chứ không dùng makeDom: trang này chỉ có ba
+   phần tử và hai sự kiện, và nó cần bắn được sự kiện — makeDom cố tình
+   không làm việc đó. */
+function bootCapture(options) {
+  const opts = options || {};
+  const el = (id) => {
+    const node = makeElement('div');
+    node.id = id;
+    const listeners = {};
+    node.addEventListener = function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); };
+    node.fire = function (name, event) {
+      (listeners[name] || []).forEach((fn) => fn(event || { preventDefault: function () {} }));
+    };
+    return node;
+  };
+  const nodes = { captureForm: el('captureForm'), captureText: el('captureText'), captureMsg: el('captureMsg') };
+
+  const docListeners = {};
+  const document = {
+    body: makeElement('body'),
+    hidden: false,
+    getElementById: (id) => nodes[id] || null,
+    addEventListener: function (name, fn) { (docListeners[name] = docListeners[name] || []).push(fn); },
+    fire: function (name, event) { (docListeners[name] || []).forEach((fn) => fn(event)); }
+  };
+
+  const winListeners = {};
+  let closed = 0;
+  const window = {
+    addEventListener: function (name, fn) { (winListeners[name] = winListeners[name] || []).push(fn); },
+    fire: function (name) { (winListeners[name] || []).forEach((fn) => fn()); },
+    close: function () { closed++; }
+  };
+
+  const calls = [];
+  const sandbox = { console: console, Promise, Error, JSON, Math, Date, Object, Array, String, Number, RegExp, Set, Map };
+  sandbox.window = window;
+  sandbox.document = document;
+  sandbox.setTimeout = setTimeout;
+  sandbox.fetch = function (path, init) {
+    calls.push({ path: path, init: init });
+    if (opts.networkDown) return Promise.reject(new TypeError('Failed to fetch'));
+    const ok = opts.refused !== true;
+    return Promise.resolve({
+      ok: ok,
+      status: ok ? 200 : 400,
+      json: function () { return Promise.resolve(opts.reply || { ok: true }); }
+    });
+  };
+
+  const vm2 = require('vm');
+  vm2.createContext(sandbox);
+  vm2.runInContext(fs.readFileSync(path.join(ROOT, 'web', 'capture.js'), 'utf8'),
+    sandbox, { filename: 'web/capture.js' });
+  return { nodes: nodes, document: document, window: window, calls: calls, closed: () => closed };
+}
+
+/* `chờ` để phần bất đồng bộ của capture.js chạy xong trước khi soi kết quả:
+   hàm xử lý gửi đi rồi trả về, còn `fetch` và `.then` chạy ở nhịp sau. */
+function settle() { return new Promise((resolve) => setImmediate(resolve)); }
+
+function checkCaptureWindow() {
+  section('[15b] Trang ghi nhanh, chạy thật');
+
+  const blank = bootCapture({});
+  blank.nodes.captureText.value = '   \n  ';
+  blank.nodes.captureForm.fire('submit');
+  check('ghi nhanh câu rỗng thì không gọi máy chủ', blank.calls.length === 0, blank.calls.length);
+  check('ghi nhanh câu rỗng thì không đóng cửa sổ', blank.closed() === 0);
+  check('ghi nhanh câu rỗng thì nói ra, không im lặng', blank.nodes.captureMsg.textContent.length > 0,
+    blank.nodes.captureMsg.textContent);
+
+  const ok = bootCapture({});
+  ok.nodes.captureText.value = '  gọi   khách\n về hợp đồng A  ';
+  ok.nodes.captureForm.fire('submit');
+  return settle().then(() => settle()).then(() => {
+    check('ghi nhanh gửi đúng một yêu cầu, tới đúng đường dẫn',
+      ok.calls.length === 1 && ok.calls[0].path === '/api/plans/inbox', ok.calls.map((c) => c.path));
+    const body = JSON.parse(ok.calls[0].init.body);
+    check('ghi nhanh gửi lên đúng thao tác thêm và tự khai nguồn gốc',
+      body.action === 'add' && body.source === 'hotkey', body);
+    check('ghi nhanh gửi chữ đã gộp khoảng trắng, không gửi xuống dòng',
+      body.text === 'gọi khách về hợp đồng A', body.text);
+    check('ghi xong thì đóng cửa sổ', ok.closed() === 1, ok.closed());
+    check('ghi xong thì xoá ô nhập', ok.nodes.captureText.value === '');
+
+    /* Nhánh quan trọng nhất: máy chủ không trả lời. Câu huynh gõ phải Ở LẠI. */
+    const down = bootCapture({ networkDown: true });
+    down.nodes.captureText.value = 'câu không được phép biến mất';
+    down.nodes.captureForm.fire('submit');
+    return settle().then(() => settle()).then(() => {
+      check('máy chủ chết thì câu vừa gõ VẪN CÒN trong ô',
+        down.nodes.captureText.value === 'câu không được phép biến mất', down.nodes.captureText.value);
+      check('máy chủ chết thì cửa sổ KHÔNG đóng', down.closed() === 0, down.closed());
+      check('máy chủ chết thì ô nhập được mở lại để gõ tiếp', down.nodes.captureText.disabled === false);
+      check('máy chủ chết thì nói ra là chưa ghi được',
+        /Chưa ghi được/.test(down.nodes.captureMsg.textContent), down.nodes.captureMsg.textContent);
+
+      /* Máy chủ trả lời nhưng TỪ CHỐI (ví dụ tệp kế hoạch hỏng). Cùng một
+         lời hứa: câu ở lại, và câu giải thích của máy chủ phải tới được mắt
+         huynh — nuốt nó đi thì huynh chỉ biết là "không ghi được", không
+         biết vì sao. */
+      const refused = bootCapture({ refused: true, reply: { ok: false, error: 'Tệp việc đang hỏng.' } });
+      refused.nodes.captureText.value = 'câu bị máy chủ từ chối';
+      refused.nodes.captureForm.fire('submit');
+      return settle().then(() => settle()).then(() => {
+        check('máy chủ từ chối thì câu vừa gõ VẪN CÒN trong ô',
+          refused.nodes.captureText.value === 'câu bị máy chủ từ chối', refused.nodes.captureText.value);
+        check('máy chủ từ chối thì lý do của máy chủ hiện ra nguyên văn',
+          refused.nodes.captureMsg.textContent.indexOf('Tệp việc đang hỏng.') !== -1,
+          refused.nodes.captureMsg.textContent);
+
+        /* Esc: đóng mà KHÔNG xoá. Lần sau bấm phím tắt, câu cũ vẫn còn — mở
+           lại thì nó được chọn sẵn, gõ tiếp là thay ngay. */
+        const esc = bootCapture({});
+        esc.nodes.captureText.value = 'câu bỏ dở';
+        esc.window.fire('focus');
+        esc.document.fire('keydown', { key: 'Escape', preventDefault: function () {} });
+        check('Esc đóng cửa sổ nhưng KHÔNG xoá câu đang gõ',
+          esc.closed() === 1 && esc.nodes.captureText.value === 'câu bỏ dở', esc.nodes.captureText.value);
+      });
+    });
+  });
+}
+
 check('app.js nạp được trong DOM giả', !!booted.sandbox.DevTrace);
 check('DevTrace phơi hàm boot để kiểm thử', typeof booted.sandbox.DevTrace.boot === 'function');
 
@@ -3667,6 +4035,10 @@ function checkServerRoutes() {
      xuất. Không có phép kiểm này thì việc thêm kế hoạch vào bản sao lưu chỉ
      là một dòng mã có thể biến mất mà không ai biết. */
   const PLAN_EXPORT_MARKER = 'SAO-LUU-NHIEM-VU-THU-4271';
+  /* Một câu ghi nhanh đi qua máy chủ. Nó phải tới được đường ghi, đọc lại
+     được, và — quan trọng nhất — phải Ở LẠI hộp thư đến khi lần phân loại
+     sau đó bị từ chối. */
+  const INBOX_HTTP_TEXT = 'GHI-NHANH-QUA-MAY-CHU-8823';
 
   const planBadDay = callApi('GET', '/api/plans', {});
   const planBadFormat = callApi('GET', '/api/plans', { day: 'hom-qua' });
@@ -3708,6 +4080,51 @@ function checkServerRoutes() {
       .then((deleted) => {
         check('xoá nhiệm vụ qua máy chủ thì được', deleted.status === 200 && deleted.body.ok === true, deleted.body && deleted.body.error);
 
+        // Hộp thư đến: đường GHI NHANH, và là đường cửa sổ phím tắt gọi.
+        return callApi('POST', '/api/plans/inbox', {}, { action: 'add', text: INBOX_HTTP_TEXT, source: 'hotkey' });
+      })
+      .then((added) => {
+        check('ghi nhanh vào hộp thư đến qua máy chủ thì được',
+          added.status === 200 && added.body.ok === true, added.body && added.body.error);
+        check('mục ghi từ phím tắt tự khai nguồn gốc',
+          !!added.body.item && added.body.item.source === 'hotkey', added.body.item);
+        return callApi('POST', '/api/plans/inbox', {}, { action: 'add', text: '   ' });
+      })
+      .then((blank) => {
+        check('ghi nhanh câu rỗng qua máy chủ bị từ chối kèm lý do',
+          blank.status === 400 && !!blank.body.error, blank.body);
+        return callApi('GET', '/api/plans', { day: DAY }).then((after) => {
+          check('mục vừa ghi hiện ra ở lần đọc sau',
+            after.body.inbox.some((i) => i.text === INBOX_HTTP_TEXT), after.body.inbox);
+          return after.body.inbox.find((i) => i.text === INBOX_HTTP_TEXT);
+        });
+      })
+      .then((item) => callApi('POST', '/api/plans/inbox', {}, { action: 'promote', id: item.id, horizon: 'khong-co-that' })
+        .then((bad) => {
+          check('phân loại vào tầm nhìn lạ bị từ chối kèm lý do', bad.status === 400 && !!bad.body.error, bad.body);
+          return callApi('GET', '/api/plans', { day: DAY }).then((after) => {
+            /* Tính NGUYÊN TỬ: một lần phân loại hỏng không được làm mục biến
+               mất. Mất mục mà không có việc nào thay thế là mất chữ của huynh,
+               và không có gì để lần theo. */
+            check('phân loại bị từ chối thì mục VẪN CÒN trong hộp thư đến',
+              after.body.inbox.some((i) => i.id === item.id), after.body.inbox);
+            return item;
+          });
+        }))
+      .then((item) => callApi('POST', '/api/plans/inbox', {}, { action: 'promote', id: item.id, horizon: 'day' }))
+      .then((promoted) => {
+        check('phân loại được thì thành một việc thật',
+          promoted.status === 200 && promoted.body.ok === true && !!promoted.body.task,
+          promoted.body && promoted.body.error);
+        const itemId = promoted.body.promoted && promoted.body.promoted.id;
+        return callApi('GET', '/api/plans', { day: DAY }).then((after) => {
+          check('phân loại xong thì mục rời hộp thư đến và việc có mặt trên bảng ngày',
+            after.body.inbox.every((i) => i.id !== itemId)
+            && after.body.board.day.some((t) => t.id === promoted.body.task.id), after.body.inbox);
+          return callApi('POST', '/api/plans/task', {}, { action: 'delete', id: promoted.body.task.id });
+        });
+      })
+      .then(() => {
         // Thời khoá biểu: một buổi sáng thứ Hai.
         return callApi('POST', '/api/plans/slot', {}, {
           action: 'save', weekday: 1, start: '09:00', end: '11:00', title: 'Buổi sâu', kind: 'deep'
@@ -3849,10 +4266,11 @@ function checkServerRoutes() {
         // đó, và phép kiểm "mọi đường dẫn API đều có ở máy chủ" chỉ nhận chữ
         // thường cùng dấu `/`.
         const needed = ['/api/plans', '/api/plans/task', '/api/plans/slot', '/api/plans/sprint',
+          '/api/plans/inbox',
           '/api/repohealth', '/api/repohealth/refresh', '/api/fs/dirs',
           '/api/mail', '/api/mail/refresh'];
         const absent = needed.filter((p) => serverSrc.indexOf("'" + p + "'") === -1);
-        check('chín đường dẫn mới có nguyên văn trong server.js', absent.length === 0, absent);
+        check('mười đường dẫn mới có nguyên văn trong server.js', absent.length === 0, absent);
         check('không có đường dẫn dự án riêng — khai dự án đi qua /api/config',
           serverSrc.indexOf("'/api/projects/") === -1);
         check('duyệt thư mục chỉ đọc, không có đường nào ghi vào máy', serverSrc.indexOf('listDirs') !== -1
@@ -3870,6 +4288,8 @@ checkStopGuards().then(function () {
   return checkEnsureServer();
 }).then(function () {
   return checkServerRoutes();
+}).then(function () {
+  return checkCaptureWindow();
 }).then(function () {
   return booted.sandbox.DevTrace.boot();
 }).then(function () {

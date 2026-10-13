@@ -61,7 +61,16 @@ function tasksFile(config) { return path.join(plansDir(config), 'tasks.json'); }
 function timetableFile(config) { return path.join(plansDir(config), 'timetable.json'); }
 function sprintsFile(config) { return path.join(plansDir(config), 'sprints.json'); }
 
-function emptyTasks() { return { version: 1, updatedAt: 0, seq: 0, tasks: [], completions: {} }; }
+/* `inbox` là khoá ĐƯỢC THÊM vào tệp việc, không phải tệp mới và không phải
+   khoá bị đổi tên: `tasks` và `completions` đi qua nguyên vẹn, nên mở bản cũ
+   ra vẫn thấy đúng từng việc như trước.
+
+   Vì sao để chung tệp với việc chứ không tách ra: một mục trong hộp thư đến
+   tồn tại chỉ để TRỞ THÀNH một việc. Để chung thì "chuyển thành việc" là một
+   lần ghi duy nhất — hoặc được cả hai, hoặc không được gì. Tách ra hai tệp
+   thì ghi hỏng giữa chừng sẽ đẻ ra hoặc một việc trùng, hoặc một mục đã biến
+   mất. */
+function emptyTasks() { return { version: 1, updatedAt: 0, seq: 0, tasks: [], completions: {}, inbox: [] }; }
 function emptyTimetable() { return { version: 1, updatedAt: 0, seq: 0, principle: '', sessions: [] }; }
 function emptySprints() { return { version: 1, updatedAt: 0, seq: 0, sprints: [] }; }
 
@@ -168,6 +177,7 @@ function loadStore(config, opts) {
   // trên đĩa cho tới khi huynh tự sửa, vì ghi lại là việc của huynh.
   store.tasks.tasks = Array.isArray(store.tasks.tasks) ? store.tasks.tasks : [];
   store.tasks.completions = isPlainObject(store.tasks.completions) ? store.tasks.completions : {};
+  store.tasks.inbox = Array.isArray(store.tasks.inbox) ? store.tasks.inbox : [];
   store.timetable.sessions = Array.isArray(store.timetable.sessions) ? store.timetable.sessions : [];
   // "Nguyên tắc" là ghi chú tự do cho cả tuần. Đây là khoá ĐƯỢC THÊM, không
   // phải khoá bị đổi tên: mảng `sessions` đi qua nguyên vẹn, nên mở bản cũ
@@ -837,6 +847,10 @@ function view(config, day, opts) {
     corrupt: store.corrupt || {},
     warnings: Object.keys(store.corrupt || {}).map((k) => corruptMessage(store.corrupt[k])),
     tasks: store.tasks.tasks.filter(isPlainObject),
+    /* Hộp thư đến trả theo thứ tự GHI VÀO, cũ trước. Đây là hàng đợi để dọn
+       theo lượt, không phải bảng tin — đảo chiều thì mục cũ nhất bị đẩy
+       xuống đáy và không bao giờ được phân loại. */
+    inbox: store.tasks.inbox.filter(isPlainObject),
     timetable: store.timetable.sessions.filter(isPlainObject).map(normalizeSession).filter(Boolean),
     sprints: store.sprints.sprints.filter(isPlainObject),
     board: boardOf(config, store, day, skipped),
@@ -1013,6 +1027,117 @@ function applyTask(config, action, payload, opts) {
     if (action === 'occur-toggle') return occurToggle(config, part, input, opts);
     if (action === 'move') return taskMove(config, part, input, opts);
     return { error: 'Thao tác việc không rõ: ' + action };
+  });
+}
+
+/* --- Thay đổi: hộp thư đến -------------------------------------------
+
+   Ghi nhanh chỉ đáng dùng nếu nó KHÔNG bắt huynh quyết gì lúc gõ. Nên một
+   mục chỉ có đúng ba thứ: chữ huynh gõ, lúc gõ, và nó tới từ đâu. Không tầm
+   nhìn, không dự án, không hạn — ba thứ đó là việc của lúc PHÂN LOẠI, không
+   phải của lúc ghi. */
+
+const INBOX_MAX_TEXT = 300;
+
+/* Trần này không phải để tiết kiệm chỗ. Một hộp thư đến không bao giờ được
+   dọn thì đúng ba tuần sau nó thành một danh sách việc thứ hai — và lúc đó
+   nó không còn là chỗ ghi nhanh nữa, nó là một đống phải đọc. Chặn ở đây và
+   NÓI RA LÝ DO, thay vì im lặng nhận thêm rồi phình ra. */
+const INBOX_MAX_ITEMS = 500;
+
+/* Ba tầm nhìn để phân loại, và đúng ba nút trên mỗi mục trong hộp thư đến.
+   Việc cố định không có ở đây: nó cần một kiểu lặp, mà lúc dọn một dòng vừa
+   gõ thì chưa có kiểu lặp nào để chọn. */
+const PROMOTE_HORIZONS = ['day', 'week', 'goal'];
+
+function findInbox(part, id) {
+  for (const item of part.inbox) if (isPlainObject(item) && item.id === id) return item;
+  return null;
+}
+
+// Chữ ghi nhanh hay dính xuống dòng và khoảng trắng thừa. Gộp lại thành một
+// dòng trước khi lưu, để chỗ đọc không phải lo định dạng.
+function cleanLine(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, INBOX_MAX_TEXT);
+}
+
+function inboxAdd(config, part, input, opts) {
+  const text = cleanLine(input.text);
+  if (!text) return { error: 'Chưa gõ gì để ghi.' };
+  if (part.inbox.length >= INBOX_MAX_ITEMS) {
+    return {
+      error: 'Hộp thư đến đã có ' + part.inbox.length + ' mục chưa phân loại. '
+        + 'Phân loại hoặc xoá bớt trước khi ghi thêm.'
+    };
+  }
+  const item = {
+    id: nextId(part, 'in'),
+    text,
+    createdAt: nowOf(opts),
+    source: textOf(input.source, 'app').slice(0, 20)
+  };
+  part.inbox.push(item);
+  return { item, count: part.inbox.length };
+}
+
+function inboxEdit(part, input, opts) {
+  const item = findInbox(part, input.id);
+  if (!item) return { error: 'Không thấy mục ' + input.id };
+  const text = cleanLine(input.text);
+  if (!text) return { error: 'Chưa gõ gì để ghi.' };
+  item.text = text;
+  item.updatedAt = nowOf(opts);
+  return { item };
+}
+
+function inboxDelete(part, input) {
+  const at = part.inbox.findIndex((entry) => isPlainObject(entry) && entry.id === input.id);
+  if (at === -1) return { error: 'Không thấy mục ' + input.id };
+  const removed = part.inbox[at];
+  part.inbox.splice(at, 1);
+  return { removed, count: part.inbox.length };
+}
+
+/* Phân loại: mục biến thành việc VÀ rời hộp thư đến trong CÙNG MỘT lần ghi.
+
+   Làm hai bước thì có một khoảnh khắc cả hai cùng tồn tại, và lúc đó huynh
+   phải tự nhớ mục nào đã xử lý rồi — đúng thứ cái hộp thư đến sinh ra để
+   tránh. Việc được tạo bằng đúng `taskSave` của đường tạo việc thường, nên
+   mọi phép kiểm của nó (tầm nhìn hợp lệ, việc cố định phải có kiểu lặp) vẫn
+   áp dụng nguyên vẹn. */
+function inboxPromote(config, part, input, opts) {
+  const item = findInbox(part, input.id);
+  if (!item) return { error: 'Không thấy mục ' + input.id };
+  /* Ba tầm nhìn để PHÂN LOẠI, không phải bốn: 'recurring' cần thêm kiểu lặp,
+     mà lúc phân loại một dòng vừa gõ thì chưa có kiểu lặp nào để chọn.
+
+     Tầm nhìn lạ bị TỪ CHỐI chứ không rơi về 'day' như `taskSave` vẫn làm. Ở
+     đường tạo việc thường, rơi về 'day' là hợp lý — biểu mẫu luôn gửi kèm
+     một giá trị, nên giá trị thiếu chỉ là chuyện của dữ liệu cũ. Ở đây thì
+     khác: tầm nhìn tới từ nút huynh vừa bấm, nên một giá trị lạ nghĩa là yêu
+     cầu này không tới từ nút nào cả. Âm thầm biến nó thành việc "hôm nay" là
+     vừa mất mục khỏi hộp thư đến, vừa đặt nó vào một tầm nhìn huynh chưa hề
+     chọn — hai việc sai cùng lúc, và không có gì để lần theo. */
+  if (PROMOTE_HORIZONS.indexOf(input.horizon) === -1) {
+    return { error: 'Phân loại vào một trong ba tầm nhìn: ' + PROMOTE_HORIZONS.join(', ') + '.' };
+  }
+  const made = taskSave(config, part, { title: item.text, horizon: input.horizon }, opts);
+  if (made.error) return made;
+
+  const at = part.inbox.indexOf(item);
+  part.inbox.splice(at, 1);
+  return { task: made.task, promoted: item, count: part.inbox.length };
+}
+
+function applyInbox(config, action, payload, opts) {
+  const input = payload || {};
+  return mutate(config, 'tasks', opts, (store) => {
+    const part = store.tasks;
+    if (action === 'add') return inboxAdd(config, part, input, opts);
+    if (action === 'edit') return inboxEdit(part, input, opts);
+    if (action === 'delete') return inboxDelete(part, input);
+    if (action === 'promote') return inboxPromote(config, part, input, opts);
+    return { error: 'Thao tác hộp thư đến không rõ: ' + action };
   });
 }
 
@@ -1228,6 +1353,7 @@ module.exports = {
   compareSessions, schedule, overlapMinutes,
   week, weekEndOf,
   view, boardOf, backlogOf, velocityOf, sprintPoints,
-  applyTask, applySlot, applySprint,
-  HORIZONS, HORIZON_LABEL, FREQS, FREQ_LABEL, KINDS, KIND_LABEL, WEEKDAY_LABEL, TASK_STATUS, DONE_RATIO
+  applyTask, applySlot, applySprint, applyInbox,
+  HORIZONS, HORIZON_LABEL, FREQS, FREQ_LABEL, KINDS, KIND_LABEL, WEEKDAY_LABEL, TASK_STATUS, DONE_RATIO,
+  INBOX_MAX_TEXT, INBOX_MAX_ITEMS, PROMOTE_HORIZONS
 };

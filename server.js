@@ -44,6 +44,11 @@ const TYPES = {
    chủ), data/ (bằng chứng cá nhân) và tệp cấu hình đều bị chặn. */
 const ALLOW = [
   /^\/index\.html$/,
+  /* Cửa sổ ghi nhanh (Ctrl + Alt + N) nạp từ chính máy chủ này chứ không mở
+     từ đĩa. Cùng nguồn gốc thì nó dùng chung localStorage — bảng màu đang
+     chọn đi theo — và gửi thẳng vào API được, khỏi phải mở CORS cho cả máy
+     chủ chỉ vì một ô nhập. */
+  /^\/capture\.html$/,
   /^\/styles\.css$/,
   /^\/favicon\.ico$/,
   /^\/(?:web|assets)\/[A-Za-z0-9._/-]+\.(?:js|css|svg|png|jpg|jpeg|webp|woff2)$/
@@ -261,6 +266,21 @@ async function api(req, res, urlPath, query) {
   if (urlPath === '/api/plans/sprint' && req.method === 'POST') {
     const body = await readBody(req);
     const result = Plans.applySprint(config, String(body.action || ''), body);
+    return sendJson(res, result.ok ? 200 : 400, result);
+  }
+
+  /* Hộp thư đến — đường GHI NHANH.
+
+     Đây là route mà cửa sổ ghi nhanh gọi, và nó phải trả lời trong vài
+     mili giây: nó ghi vào tệp việc, không đọc bằng chứng, không chạy git,
+     không mở mạng. Nếu chỗ này chậm thì phím tắt thành vô dụng, và ghi một
+     việc lại đắt hơn mở Notepad.
+
+     `source` chỉ để biết mục tới từ phím tắt hay từ giao diện — không bao
+     giờ được dùng làm bằng chứng. Nó là chữ huynh gõ, không phải máy đọc. */
+  if (urlPath === '/api/plans/inbox' && req.method === 'POST') {
+    const body = await readBody(req);
+    const result = Plans.applyInbox(config, String(body.action || ''), body);
     return sendJson(res, result.ok ? 200 : 400, result);
   }
 

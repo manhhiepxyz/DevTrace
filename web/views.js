@@ -546,6 +546,59 @@
       addBtn + '</div>';
   }
 
+  /* --- Hộp thư đến ---------------------------------------------------
+
+     Chỗ hứng những gì huynh gõ trong ba giây. Nó KHÔNG phải một tầm nhìn
+     thứ năm: mục ở đây chưa có tầm nhìn, chưa có dự án, chưa có hạn — đó
+     chính là lý do ghi nhanh mới nhanh được. Ba nút bên mỗi mục là lúc
+     PHÂN LOẠI, và phân loại là việc của lúc rảnh, không phải của lúc gõ.
+
+     Ô nhập hiện ngay trên màn Hôm nay, không giấu sau một nút: phím tắt
+     toàn cục chỉ giúp được khi huynh đã biết nó có ở đó. */
+  /* Nhãn nút phân loại phải NGẮN và phải khớp tên cột của bảng việc ngay
+     bên dưới — bấm "Tuần này" mà không thấy nó chui vào đâu thì nút đó vô
+     nghĩa. Ba tầm nhìn, không phải bốn: việc cố định cần thêm kiểu lặp, mà
+     hỏi kiểu lặp ngay lúc phân loại là bắt quyết định hai lần một lúc. */
+  var INBOX_TRIAGE = [['day', 'Hôm nay'], ['week', 'Tuần này'], ['goal', 'Mục tiêu']];
+
+  function inboxItemHtml(item) {
+    var id = esc(item.id);
+    var triage = INBOX_TRIAGE.map(function (pair) {
+      return '<button class="btn btn-sm" data-action="inbox-promote" data-value="' + id +
+        '" data-horizon="' + pair[0] + '">' + pair[1] + '</button>';
+    }).join('');
+    return '<li class="inbox-item">' +
+      '<button class="inbox-text" data-action="inbox-edit" data-value="' + id + '" ' +
+      'title="Bấm để sửa chữ">' + esc(item.text) + '</button>' +
+      '<span class="inbox-actions">' + triage +
+      '<button class="btn btn-sm btn-ghost" data-action="inbox-delete" data-value="' + id + '" ' +
+      'title="Xoá khỏi hộp thư đến">✕</button></span>' +
+      '</li>';
+  }
+
+  function inboxHtml(ctx) {
+    var plans = ctx.data.plans;
+    if (!plans) return '';
+    var items = (plans.inbox || []).filter(function (i) { return i && i.text; });
+    var count = items.length;
+
+    var list = count
+      ? '<ul class="inbox-list">' + items.map(inboxItemHtml).join('') + '</ul>'
+      : '<p class="card-sub inbox-empty">Trống. Gõ một dòng ở trên — hoặc bấm <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>N</kbd> ' +
+        'ở bất kỳ đâu, kể cả khi DevTrace đang thu xuống khay.</p>';
+
+    return card('Hộp thư đến', '收',
+      '<p class="card-sub">Ghi nhanh, phân loại sau. Mục ở đây chưa phải việc — ' +
+      'nó chỉ thành việc khi huynh bấm một trong ba tầm nhìn.</p>' +
+      '<div class="inbox-capture">' +
+      '<input type="text" id="inboxText" data-role="inbox-text" maxlength="300" ' +
+      'placeholder="Ghi nhanh một việc rồi bấm Enter…">' +
+      '<button class="btn btn-primary" data-action="inbox-add">Ghi</button>' +
+      '</div>' +
+      (count ? '<div class="card-sub mt">' + count + ' mục chưa phân loại</div>' : '') +
+      list);
+  }
+
   function boardHtml(ctx) {
     var plans = ctx.data.plans;
     if (!plans) return '';
@@ -1039,7 +1092,10 @@
        định làm gì" phải trả lời được trước khi đọc bất cứ con số nào về ngày
        hôm qua. Kế hoạch không có dữ liệu thì các khối này tự thuật lại việc
        chúng chưa có gì — không im lặng biến mất. */
-    return timetableHtml(ctx) + sprintBandHtml(ctx) + boardHtml(ctx) +
+    /* Hộp thư đến đứng TRÊN bảng tuần. Trên màn này chỉ nó là thứ đang
+       ĐỢI huynh; mọi khối còn lại là thông tin để đọc. Đặt nó dưới cùng thì
+       mục ghi nhanh ba hôm trước nằm khuất dưới ba cuộn giấy. */
+    return inboxHtml(ctx) + timetableHtml(ctx) + sprintBandHtml(ctx) + boardHtml(ctx) +
       '<div class="grid hero">' +
       '<div>' + questionOne + questionTwo + questionThree + '</div>' +
       '<div>' + card('Số liệu trong ngày', '數', sideBody) + warningsHtml(ctx) + journalCard + mailCard(ctx) +

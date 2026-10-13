@@ -576,6 +576,100 @@ th.slot-today .slot-date, th.slot-today .slot-upcoming { color: var(--cinabar); 
   .slot-head { width: 112px; min-width: 112px; }
 }
 
+/* ---- Hộp thư đến ----
+
+   Ô nhập phải NỔI HƠN mọi thứ quanh nó: đây là chỗ duy nhất trên màn hình
+   chờ huynh gõ. Nên nó có nền `--bg-2` (tối hơn nền thẻ) và viền đổi màu
+   khi được chọn, trong khi mọi ô nhập khác trong ứng dụng chỉ có viền mảnh.
+   Mục trong danh sách mang vạch trái `--gold` — màu "đang chờ xử lý", khác
+   hẳn `--jade` (xong) và `--cinabar` (tới hạn) đang dùng ở chỗ khác. */
+
+.inbox-capture { display: flex; gap: 8px; align-items: stretch; }
+.inbox-capture input {
+  flex: 1 1 auto; min-width: 0;
+  font: inherit; font-size: 14px;
+  padding: 8px 11px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--ink);
+}
+.inbox-capture input:focus {
+  outline: none; border-color: var(--cinabar); background: var(--panel);
+}
+.inbox-list {
+  list-style: none; margin: 12px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.inbox-item {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft); border-left: 3px solid var(--gold);
+  background: var(--panel-2);
+}
+/* Chữ là một cái nút (bấm để sửa) nhưng phải TRÔNG như chữ, không như nút —
+   năm cái nút một hàng thì không còn đọc ra được đâu là nội dung. */
+.inbox-text {
+  flex: 1 1 240px; min-width: 0; text-align: left;
+  font: inherit; font-size: 13.5px; cursor: text;
+  background: transparent; border: 0; color: var(--ink); padding: 2px 0;
+}
+.inbox-text:hover { color: var(--cinabar); text-decoration: underline dotted; }
+.inbox-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.inbox-empty { margin: 12px 0 0; }
+.inbox-empty kbd {
+  font: inherit; font-size: 11.5px; padding: 1px 5px;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel-2); color: var(--ink-soft);
+}
+
+/* ---- Cửa sổ ghi nhanh (Ctrl + Alt + N) ----
+
+   Cùng một hộp thư đến, cửa thứ hai. Trang của cửa sổ này (capture.html)
+   nạp CHUNG tệp bảng kiểu này, nên nó đổi màu theo đúng bảng màu huynh
+   đang chọn — không có bộ màu thứ hai để lệch.
+
+   Cửa sổ không có viền của Windows (không thanh tiêu đề, không nút), nên
+   khung phải tự vẽ: viền `--line` và bóng `--shadow`. Cả cửa sổ chỉ có
+   một việc để làm, nên ô nhập to hơn hẳn mọi ô nhập khác trong ứng dụng —
+   mắt phải rơi thẳng vào chỗ gõ được ngay, không phải đi tìm. */
+
+.capture-body {
+  margin: 0; height: 100vh; overflow: hidden;
+  background: var(--bg); color: var(--ink);
+  display: flex; flex-direction: column; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* Không có thanh tiêu đề thì đây là cách duy nhất để di chuyển cửa sổ:
+     nắm lấy phần nền trống mà kéo. Ô nhập được trả lại cho việc gõ. */
+  -webkit-app-region: drag;
+}
+.capture-form { padding: 13px 15px; display: flex; flex-direction: column; gap: 9px; }
+.capture-input {
+  -webkit-app-region: no-drag;
+  font: inherit; font-size: 17px;
+  padding: 11px 13px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+}
+.capture-input:focus { outline: none; border-color: var(--cinabar); }
+.capture-input:disabled { color: var(--muted); }
+.capture-foot {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+  gap: 2px 10px; font-size: 11.5px; color: var(--muted);
+}
+.capture-hint { min-width: 0; }
+.capture-hint kbd {
+  font: inherit; padding: 1px 5px;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel-2); color: var(--ink-soft);
+}
+/* Câu báo lỗi là thứ duy nhất trong cửa sổ này được phép đổi màu: nó nói
+   rằng câu huynh vừa gõ CHƯA được ghi, và mắt phải bắt được điều đó. */
+.capture-msg { flex: 1 1 auto; min-width: 0; text-align: right; }
+/* Có chuyện để nói thì dòng gợi ý rút đi. Câu giải thích của máy chủ có thể
+   dài — "Hộp thư đến đã có 500 mục chưa phân loại…" — và để hai thứ giành
+   nhau một dòng 620 pixel thì cả hai cùng khó đọc. Cửa sổ chỉ cao hơn trăm
+   pixel, không có chỗ cho dòng thứ ba. */
+.capture-foot:has(.capture-msg:not(:empty)) .capture-hint { display: none; }
+.capture-bad { color: var(--cinabar); }
+
 /* ---- Bảng bốn tầm nhìn ---- */
 
 .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
