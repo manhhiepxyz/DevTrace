@@ -48,9 +48,6 @@
     "vscode": {
       "enabled": true
     },
-    "window": {
-      "enabled": false
-    },
     "github": {
       "enabled": false,
       "user": "",

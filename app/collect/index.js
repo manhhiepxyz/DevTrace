@@ -34,7 +34,6 @@ const COLLECTORS = {
   browser: require('./browser'),
   shell: require('./shell'),
   vscode: require('./vscode'),
-  window: require('./window'),
   github: require('./github')
 };
 

@@ -103,7 +103,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 631 kiểm tra
+npm test            # chạy 632 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -239,7 +239,6 @@ của nguồn nào — đó là lý do phải có nhiều nguồn.
 | **Terminal** | Lịch sử PSReadLine | Lệnh huynh **tự gõ** — thước đo tự lực, tách khỏi lệnh AI chạy |
 | **VS Code** | `workspaceStorage`, `globalStorage` | Phiên soạn thảo, cửa sổ đang mở, số phiên trò chuyện AI trong editor |
 | **GitHub** | API công khai của GitHub | Việc chỉ tồn tại trên mạng: pull request, issue, review, sao — thứ `git log` trên máy không thấy được |
-| **Cửa sổ** | *tuỳ chọn*, do huynh tự chạy | Thời gian tập trung theo ứng dụng ở tiền cảnh |
 | **Tự ghi** | Huynh tự thêm | Ghi chú của chính huynh — nguồn duy nhất không do máy sinh ra |
 
 Nguồn **GitHub** cũng mặc định tắt, và đây là nguồn **duy nhất** gửi dữ liệu ra khỏi máy
@@ -248,19 +247,16 @@ nhắc **tên** qua `tokenEnv`, không bao giờ được lưu. Nó là nguồn 
 chỉ trả khoảng 90 ngày gần nhất, nên tính lại từ đầu mỗi lần là tự xoá dần quá khứ — bằng
 chứng đã thấy một lần thì ở lại.
 
-Nguồn **Cửa sổ** mặc định tắt và không tự cài gì vào máy. Khi nào muốn đo:
+### Nguồn "cửa sổ đang mở" đã bị bỏ — và vì sao
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\window-sampler.ps1
-```
+Trước đây DevTrace có nguồn thứ chín: một script `.ps1` huynh tự chạy để đo thời gian tập
+trung theo ứng dụng ở tiền cảnh. **Nó đã bị xoá hẳn**, không phải tắt mặc định.
 
-Script nhận thêm `-IntervalSeconds` (mặc định 20), `-IdleSeconds` (mặc định 120: ngồi không
-quá lâu thì không tính là tập trung) và `-MinSeconds` (mặc định 5: khối quá ngắn thì bỏ).
-Muốn kiểm tra phép tính cộng dồn mà không phải ngồi đo thật:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\window-sampler.ps1 -SelfTest
-```
+Lý do: nó là nguồn **duy nhất** phải chạy tay, và chạy được chỉ khi hạ thấp chốt an toàn
+của PowerShell (`-ExecutionPolicy Bypass`). Một nguồn bằng chứng mà đổi lại là phải tắt bớt
+một chốt an toàn của hệ điều hành thì thà không có. Bỏ nó **không làm DevTrace nói sai điều
+gì**: mọi buổi vẫn mang đúng trạng thái *chưa có dấu vết* như cũ, và trạng thái đó vốn đã
+được thiết kế để không bao giờ bị đọc thành *chưa làm*.
 
 ## Trung thực về những chỗ DevTrace phải đoán
 
@@ -318,7 +314,6 @@ data/
   snapshots/files.json        ảnh chụp cây thư mục để so sánh lần sau
   snapshots/shell.json        mốc theo dõi lịch sử terminal
   health.json                 lần chạy cuối và tình trạng từng nguồn
-  window-log.jsonl            (chỉ khi huynh chạy window-sampler)
 ```
 
 **Tệp kế hoạch hỏng thì DevTrace từ chối ghi.** `U.readJson` trả về giá trị dự phòng khi
@@ -354,7 +349,7 @@ app/
   report.js           Các phép gộp phục vụ giao diện
   collect/
     index.js          Bộ điều phối + sức khoẻ nguồn
-    codex.js git.js files.js browser.js shell.js vscode.js window.js
+    codex.js git.js files.js browser.js shell.js vscode.js
     github.js         Hoạt động trên GitHub (mặc định tắt, có khe cắm mạng)
     github-fetch.js   Một lần gọi API trong tiến trình con (đường ống là đồng bộ)
 web/
@@ -364,7 +359,6 @@ web/
 tools/
   smoke-test.js       Kiểm tra tự động toàn bộ logic
   find-repos.js       Dò các kho git trên máy, in ra khối dán vào cấu hình
-  window-sampler.ps1  Đo thời gian tập trung (tuỳ chọn)
 desktop/
   DevTrace.vbs        Nhấp đúp là mở; cầu nối mỏng, lưu bằng UTF-16
   main.js             Ứng dụng Electron: một bản chạy, khay hệ thống, thu xuống khay
@@ -385,7 +379,7 @@ legacy/               Bản "Tu Luyện Ký" cũ, giữ lại để tham khảo
 - **Nguồn suy ra được** (Codex, Git, Trình duyệt, VS Code): mỗi lần thu thập sẽ **tính lại
   từ đầu** và thay thế toàn bộ bản cũ. Nhờ vậy sửa bộ thu thập xong chỉ cần chạy lại là dữ
   liệu đúng, không bị nhân đôi.
-- **Nguồn dòng chảy** (Tệp tin, Terminal, Cửa sổ, GitHub, Tự ghi): chỉ **ghi thêm** phần chưa
+- **Nguồn dòng chảy** (Tệp tin, Terminal, GitHub, Tự ghi): chỉ **ghi thêm** phần chưa
   từng thấy, vì quá khứ không thể dựng lại. Sự kiện được khử trùng theo mã định danh.
 
 ## Cái gì rời khỏi máy
@@ -439,7 +433,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-631 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+632 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra
@@ -474,12 +468,14 @@ suy nghĩ của bộ khởi động, chứ không bật ứng dụng lên làm p
 
 - **Chỉ chạy trên Windows** ở phiên bản này (đường dẫn Chrome/Edge, PSReadLine, VS Code).
 - **Lịch sử chỉ có từ lúc cài.** Codex, Git, Trình duyệt, VS Code có dữ liệu quá khứ; Terminal
-  và Cửa sổ thì không.
+  và Tệp tin thì không.
 - **Không biết huynh làm gì ngoài những nguồn trên.** Nếu huynh code trong một editor khác
   hoặc dùng một trợ lý khác, DevTrace sẽ không thấy — và nó sẽ nói thẳng là không thấy, chứ
   không đoán bừa.
-- **"Phút hoạt động" là thời gian có dấu vết, không phải thời gian ngồi trước máy.** Muốn con
-  số thứ hai thì phải bật nguồn Cửa sổ.
+- **"Phút hoạt động" là thời gian có dấu vết, không phải thời gian ngồi trước máy.** DevTrace
+  **không đo** thời gian ngồi trước máy, và cũng không đoán: nó chỉ đếm những phút có dấu vết
+  để lại. Nghỉ giữa hai việc, đọc tài liệu giấy, hay họp đều không hiện ra — và đó là sự thật
+  về dữ liệu, không phải lỗi.
 - **IMAP là phần mong manh nhất, và chỉ chạy một phần.** Chắc chắn với Gmail/Outlook **có mật
   khẩu ứng dụng**; tài khoản chỉ cho OAuth/SSO thì không dùng được, máy chủ đòi `ID` hoặc chỉ
   STARTTLS thì hỏng, tên thư mục không phải ASCII thì không hỗ trợ. Không có `IDLE`.

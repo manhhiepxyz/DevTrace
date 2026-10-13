@@ -24,13 +24,19 @@ const SOURCES = {
   browser: { label: 'Trình duyệt', kind: 'context', evidence: 'nguồn tham khảo',       color: '#3fb98a' },
   shell:   { label: 'Terminal',    kind: 'action',  evidence: 'lệnh đã chạy',          color: '#c9a227' },
   vscode:  { label: 'VS Code',     kind: 'context', evidence: 'phiên soạn thảo',       color: '#2f7fd6' },
-  window:  { label: 'Cửa sổ',      kind: 'focus',   evidence: 'thời gian tập trung',   color: '#9c6ade' },
   manual:  { label: 'Tự ghi',      kind: 'manual',  evidence: 'ghi chú của huynh',     color: '#8a8a8a' }
 };
 
+/* Nguồn "cửa sổ đang mở" (window) đã bị BỎ, không phải tạm tắt. Lý do:
+   nó là nguồn duy nhất phải chạy tay bằng một tệp .ps1, và tệp đó chỉ chạy
+   được khi hạ thấp chốt an toàn của PowerShell (`-ExecutionPolicy Bypass`).
+   Một nguồn bằng chứng mà huynh phải tắt bớt một chốt an toàn để dùng thì
+   thà không có. Trạng thái "chưa có dấu vết" của mọi buổi vẫn đúng như cũ —
+   thiếu nguồn này không làm DevTrace nói sai điều gì. */
+
 /* Nguồn "suy ra được": mỗi lần thu thập sẽ tính lại từ đầu, nên cần xoá
    bản cũ trước khi ghi bản mới để không nhân đôi sự kiện.
-   Nguồn "dòng chảy" (files, window, github) chỉ ghi thêm, phải khử trùng
+   Nguồn "dòng chảy" (files, shell, github) chỉ ghi thêm, phải khử trùng
    theo id.
 
    `github` nằm ở nhóm dòng chảy là một quyết định, không phải mặc định:
@@ -38,9 +44,9 @@ const SOURCES = {
    nếu tính lại từ đầu thì mỗi lần thu thập lại xoá đi những gì vừa rơi ra
    khỏi cửa sổ đó. Bằng chứng đã thấy một lần thì ở lại. */
 const DERIVED_SOURCES = ['codex', 'git', 'browser', 'vscode'];
-const STREAM_SOURCES = ['files', 'shell', 'window', 'github', 'manual'];
+const STREAM_SOURCES = ['files', 'shell', 'github', 'manual'];
 
-const DEFAULT_WEIGHT = { codex: 3, git: 3, files: 1, browser: 1, shell: 2, vscode: 1, window: 1, github: 2, manual: 2 };
+const DEFAULT_WEIGHT = { codex: 3, git: 3, files: 1, browser: 1, shell: 2, vscode: 1, github: 2, manual: 2 };
 
 function dataDir(config) { return U.ensureDir(config.dataDir); }
 function eventsDir(config) { return U.ensureDir(path.join(config.dataDir, 'events')); }

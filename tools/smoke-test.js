@@ -49,7 +49,6 @@ function testConfig() {
   config.sources.shell.enabled = false;
   config.sources.vscode.enabled = false;
   config.sources.files.enabled = false;
-  config.sources.window.enabled = false;
   // Nguồn duy nhất biết gọi mạng. Bộ kiểm thử phải chạy được ngoại tuyến,
   // nên nó bị tắt ở đây chứ không phải dựa vào việc mặc định là tắt.
   config.sources.github.enabled = false;
@@ -155,7 +154,12 @@ check('ghi thêm không nhân đôi', E.readDay(config, '2026-10-09').filter((e)
 section('[3] Cấu hình');
 
 const C = require('../app/config');
-check('mặc định có đủ tám nguồn', Object.keys(C.defaults().sources).length === 8);
+/* Bảy nguồn có cấu hình, cộng "Tự ghi" thành tám nguồn bằng chứng. "Tự ghi"
+   cố ý KHÔNG có mặt trong mặc định: nó không cần cấu hình gì, và
+   `settings.enabled !== false` đã coi nó là đang bật. */
+check('mặc định có đủ bảy nguồn cấu hình được',
+  Object.keys(C.defaults().sources).length === 7);
+check('cộng nguồn tự ghi là đủ tám nguồn bằng chứng', Object.keys(E.SOURCES).length === 8);
 const merged = C.merge({ a: 1, b: { c: 2, d: 3 } }, { b: { c: 9 } });
 check('gộp cấu hình theo khoá', merged.a === 1 && merged.b.c === 9 && merged.b.d === 3);
 check('gộp không phá mảng', Array.isArray(C.merge({ x: [1] }, { x: [2, 3] }).x) && C.merge({ x: [1] }, { x: [2, 3] }).x.length === 2);
@@ -414,7 +418,7 @@ check('chuỗi 7 ngày có đúng 7 mốc', digest.momentum.series.length === 7)
    ngày đầy đủ — và người đọc kết luận sai về chính mình. */
 const coverage = digest.coverage;
 check('bản tổng hợp có bảng độ phủ nguồn',
-  !!coverage && Array.isArray(coverage.rows) && coverage.rows.length === 9,
+  !!coverage && Array.isArray(coverage.rows) && coverage.rows.length === 8,
   coverage && coverage.rows && coverage.rows.length);
 check('độ phủ đếm đúng số nguồn có đóng góp',
   coverage.contributing === coverage.rows.filter((r) => r.events > 0).length, coverage.contributing);
@@ -858,7 +862,9 @@ runConfig.sources.files = { enabled: true, dirs: [watchDir], maxDepth: 3, ignore
 
 const summary = Collect.run(runConfig, {});
 check('điều phối chạy không lỗi', typeof summary.total === 'number');
-check('điều phối báo cáo từng nguồn', Object.keys(summary.sources).length === 8);
+/* Bảy, không phải tám: "Tự ghi" là nguồn có mặt trong E.SOURCES nhưng không
+   có bộ thu thập nào — nó do huynh tự thêm, không phải máy đi nhặt. */
+check('điều phối báo cáo từng nguồn', Object.keys(summary.sources).length === 7);
 check('nguồn tắt không sinh sự kiện', summary.sources.browser.events === 0);
 check('ghi lại sức khoẻ nguồn', fs.existsSync(E.healthPath(runConfig)) || true);
 const health = E.readHealth(runConfig);
@@ -870,7 +876,7 @@ check('nguồn suy ra được thay thế chứ không cộng dồn', (function 
   const after = E.readDay(runConfig, '2026-10-09').filter((e) => e.source === 'codex').length;
   return before === after;
 })());
-check('trạng thái nguồn cho giao diện', Collect.status(runConfig).sources.length === 9);
+check('trạng thái nguồn cho giao diện', Collect.status(runConfig).sources.length === 8);
 
 /* ---- Chốt chặn chống xoá dữ liệu -----------------------------------
    Nguồn suy ra được ghi bằng cách THAY TOÀN BỘ trên mọi ngày. Nghĩa là một
@@ -936,7 +942,7 @@ check('nguồn tắt thì không đụng tới kho', countSource(offConfig, 'cod
 check('nguồn tắt vẫn được báo cáo trong bảng điều phối',
   offSummary.sources.codex.events === 0 && offSummary.sources.codex.notes.join(' ').indexOf('đang tắt') !== -1,
   offSummary.sources.codex);
-check('nguồn tắt vẫn có mặt trong danh sách nguồn', Collect.status(offConfig).sources.length === 9);
+check('nguồn tắt vẫn có mặt trong danh sách nguồn', Collect.status(offConfig).sources.length === 8);
 check('nguồn tắt vẫn hiện là đang tắt cho giao diện',
   Collect.status(offConfig).sources.filter((s) => s.name === 'codex')[0].enabled === false);
 
@@ -3195,7 +3201,7 @@ check('hộp thư mặc định TẮT, và không phải một nguồn bằng ch
     && d.mail.passwordEnv === 'DEVTRACE_MAIL_PASSWORD'
     && names.indexOf('mail') === -1
     && E.DERIVED_SOURCES.indexOf('mail') === -1 && E.STREAM_SOURCES.indexOf('mail') === -1
-    && names.length === 9 && E.DERIVED_SOURCES.length + E.STREAM_SOURCES.length === names.length;
+    && names.length === 8 && E.DERIVED_SOURCES.length + E.STREAM_SOURCES.length === names.length;
 })(), { enabled: C.defaults().mail.enabled, nguon: Object.keys(E.SOURCES) });
 
 check('hộp thư tắt thì KHÔNG gọi mạng và KHÔNG ghi ảnh chụp', (function () {

@@ -51,7 +51,6 @@ function defaults() {
       browser: { enabled: true, browsers: ['chrome', 'edge'], keepDays: 30 },
       shell: { enabled: true, maxCommands: 4000 },
       vscode: { enabled: true },
-      window: { enabled: false, note: 'Cần script lấy cửa sổ đang mở; xem app/collect/window.js' },
       /* Nguồn DUY NHẤT gửi dữ liệu ra khỏi máy trong lúc thu thập, nên mặc
          định tắt: bật nó là việc huynh phải tự chọn. `tokenEnv` giữ TÊN của
          biến môi trường chứa khoá, không bao giờ giữ giá trị — cấu hình còn

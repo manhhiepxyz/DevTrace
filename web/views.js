@@ -1199,7 +1199,6 @@
       if (s.name === 'browser') detail = (settings.browsers || []).join(', ') + ' · giữ ' + (settings.keepDays || 30) + ' ngày';
       if (s.name === 'shell') detail = 'lịch sử PSReadLine (chỉ ghi lệnh mới từ lúc cài)';
       if (s.name === 'vscode') detail = 'workspaceStorage của VS Code';
-      if (s.name === 'window') detail = 'tuỳ chọn — chạy <code>tools/window-sampler.ps1</code> để đo thời gian tập trung';
       if (s.name === 'manual') detail = 'ghi chú huynh tự thêm';
 
       var notes = (health.notes || []).map(function (n) { return esc(n); }).join('<br>');

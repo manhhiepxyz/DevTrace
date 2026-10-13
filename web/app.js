@@ -164,7 +164,7 @@
       totals[source] = (totals[source] || 0) + digest.counts[key];
     });
     var colors = palette();
-    var pick = { codex: colors.plum, browser: colors.jade, files: colors.cinabar, git: colors.cinabar, shell: colors.gold, vscode: colors.indigo, window: colors.indigo };
+    var pick = { codex: colors.plum, browser: colors.jade, files: colors.cinabar, git: colors.cinabar, shell: colors.gold, vscode: colors.indigo };
     return Object.keys(totals).sort(function (a, b) { return totals[b] - totals[a]; }).map(function (source) {
       return { label: (Sources[source] && Sources[source].label) || source, value: totals[source], color: pick[source] || colors.muted };
     });
