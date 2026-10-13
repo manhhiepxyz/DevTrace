@@ -184,6 +184,36 @@ function postJson(desk, urlPath, body, timeoutMs) {
   });
 }
 
+/* Cùng lối với postJson, chỉ khác phương thức. GET ở đây vẫn có thời gian
+   chờ: một yêu cầu không bao giờ trả lời sẽ treo luôn vòng nhắc việc, và
+   vòng đó im lặng nên không ai biết vì sao thôi thấy nhắc. */
+function getJson(desk, urlPath, timeoutMs) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: desk.host,
+      port: desk.port,
+      path: urlPath,
+      method: 'GET',
+      timeout: timeoutMs || 30000
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(text); } catch (e) { json = null; }
+        resolve({ ok: res.statusCode === 200, statusCode: res.statusCode, json: json });
+      });
+    });
+    req.on('timeout', () => {
+      try { req.destroy(); } catch (e) { /* thôi */ }
+      resolve({ ok: false, reason: 'timeout' });
+    });
+    req.on('error', (error) => resolve({ ok: false, reason: (error && error.code) || String(error) }));
+    req.end();
+  });
+}
+
 /* --- Bật máy chủ và mở cửa sổ --------------------------------------- */
 
 // Máy chủ chạy tách hẳn khỏi tiến trình này: đóng cửa sổ khởi động cũng
@@ -305,6 +335,7 @@ module.exports = {
   probe: probe,
   waitForServer: waitForServer,
   postJson: postJson,
+  getJson: getJson,
   startServer: startServer,
   openWindow: openWindow,
   run: run

@@ -122,7 +122,25 @@ function defaults() {
     /* Hạn lưu trữ bằng chứng. MẶC ĐỊNH TẮT — xem app/collect/index.js để
        biết vì sao: tự động xoá dữ liệu của huynh là việc huynh phải nói rõ
        mình muốn, không phải việc chương trình tự quyết. */
-    retention: { enabled: false, days: 365, keepJournals: true }
+    retention: { enabled: false, days: 365, keepJournals: true },
+
+    /* Nhắc việc trên khay hệ thống — xem app/nudges.js.
+       Chỉ có tác dụng khi mở DevTrace như ứng dụng để bàn: `node server.js`
+       không có khay nào để hiện bong bóng. Mặc định BẬT, vì huynh đã hỏi
+       xin đúng bốn loại nhắc này; tắt được từng loại một.
+
+       `pollMinutes` là nhịp hỏi những thứ rẻ (việc quá hạn, thời khoá biểu,
+       tổng kết). `repoEveryMinutes` là nhịp RIÊNG cho phần quét kho mã: nó
+       tốn bốn lệnh git mỗi kho, nên hỏi nó mỗi năm phút là tự tay bóp nghẹt
+       ổ đĩa của chính mình. */
+    nudges: {
+      enabled: true,
+      pollMinutes: 5,
+      repoEveryMinutes: 30,
+      eveningHour: 21,
+      repoRepeatMinutes: 360,
+      kinds: { overdue: true, slot: true, repo: true, evening: true, plan: true }
+    }
   };
 }
 

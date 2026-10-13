@@ -128,21 +128,59 @@ async function inPool(items, limit, worker) {
   return results;
 }
 
-async function main(argv) {
-  const args = argv || process.argv;
+/* Chế độ thứ hai: chạy MỘT DANH SÁCH LỆNH TUỲ Ý cho mỗi kho, và trả về
+   nguyên chuỗi git in ra.
+
+   Vì sao cần: `app/nudges.js` chỉ hỏi bốn câu về mỗi kho — nhánh, remote,
+   cây làm việc, và `@{upstream}` — chứ không hỏi tám câu như
+   `repohealth.repoSnapshot` (stash, nhánh cũ, thẻ, tệp lớn, bí mật). Bắt
+   nó đọc thừa là bắt huynh trả giá bằng thời gian cho những câu không ai
+   hỏi. Nhưng 20 kho × 4 lệnh chạy lần lượt trên máy này là khoảng ba giây
+   — quá lâu cho một việc chạy nền. Nên nó dùng chung đúng cái nhóm thợ này.
+
+   Vẫn KHÔNG quyết định gì: trả về `{ok, out, err}` của từng lệnh, đúng thứ
+   git in ra. Chỗ đọc tự phân loại — xem `Git.scanCommands` và `runFromScan`
+   trong app/nudges.js. */
+async function runCommands(repo, runGit, commands) {
+  if (!U.isDir(path.join(repo, '.git'))) return { repo: repo, isRepo: false, results: [] };
+  const run = runGit || gitOut;
+  const results = [];
+  for (const args of commands) results.push(await run(repo, args));
+  return { repo: repo, isRepo: true, results: results };
+}
+
+function payloadOf(argv) {
   let payload;
   try {
-    payload = JSON.parse(args[2]);
+    payload = JSON.parse(argv[2]);
   } catch (error) {
-    process.stdout.write(JSON.stringify({ ok: false, error: 'Tham số không đọc được.' }));
-    return 1;
+    return { error: 'Tham số không đọc được.' };
   }
   const repos = (payload && payload.repos) || [];
-  if (!Array.isArray(repos)) {
-    process.stdout.write(JSON.stringify({ ok: false, error: 'Thiếu danh sách kho.' }));
+  if (!Array.isArray(repos)) return { error: 'Thiếu danh sách kho.' };
+  const commands = payload && payload.commands;
+  if (commands !== undefined) {
+    if (!Array.isArray(commands) || !commands.length) return { error: 'Danh sách lệnh rỗng hoặc sai dạng.' };
+    for (const args of commands) {
+      if (!Array.isArray(args) || !args.length || args.some((a) => typeof a !== 'string')) {
+        return { error: 'Mỗi lệnh phải là một mảng chuỗi không rỗng.' };
+      }
+    }
+  }
+  return { repos: repos, commands: commands || null };
+}
+
+async function main(argv) {
+  const args = argv || process.argv;
+  const parsed = payloadOf(args);
+  if (parsed.error) {
+    process.stdout.write(JSON.stringify({ ok: false, error: parsed.error }));
     return 1;
   }
-  const results = await inPool(repos, CONCURRENCY, (repo) => runOne(repo));
+  const repos = parsed.repos;
+  const results = parsed.commands
+    ? await inPool(repos, CONCURRENCY, (repo) => runCommands(repo, null, parsed.commands))
+    : await inPool(repos, CONCURRENCY, (repo) => runOne(repo));
   process.stdout.write(JSON.stringify({ ok: true, repos: results }));
   return 0;
 }
@@ -157,4 +195,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, runOne, inPool, classifyLog, CONCURRENCY };
+module.exports = { main, runOne, runCommands, inPool, classifyLog, payloadOf, CONCURRENCY };

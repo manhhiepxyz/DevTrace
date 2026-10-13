@@ -24,9 +24,11 @@
    nó mà không phải cài Electron, và `npm test` vẫn chạy được trên máy sạch.
    ===================================================================== */
 
+const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
 
+const U = require('../app/util');
 const Launch = require('./launch');
 const Stop = require('./stop');
 
@@ -415,6 +417,198 @@ async function collectNow(state, desk) {
   return text;
 }
 
+/* =====================================================================
+   Nhắc việc trên khay.
+
+   Máy chủ chỉ NÓI RA những gì đáng nói (`app/nudges.js`); việc quyết định
+   cái nào đã hiện rồi, cái nào chưa, là của ứng dụng để bàn. Chia như vậy
+   vì "đã báo chưa" là chuyện của MÁY NÀY và KHAY NÀY, không phải một sự
+   thật về công việc của huynh — nên nó không được nằm trong `data/`.
+
+   Chỗ nhớ nằm trong thư mục dữ liệu riêng của Electron (userData), do
+   Electron quyết định. Kho bằng chứng của huynh không được biết tới việc
+   này, và xoá thư mục đó chỉ làm DevTrace quên đã báo gì — không mất một
+   byte dữ liệu thật nào.
+   ===================================================================== */
+
+const NUDGE_FILE = 'nudges-seen.json';
+// Quên đi những khoá cũ. Không có dòng này thì tệp phình mãi: mỗi ngày vài
+// khoá, và không khoá nào trong đó còn dùng được sau một tháng.
+const NUDGE_KEEP_MS = 30 * 86400000;
+
+function seenPath(dir) { return path.join(dir || '.', NUDGE_FILE); }
+
+/* Thư mục riêng của Electron cho ứng dụng này. Không hỏi được thì rơi về
+   thư mục tạm: chỗ nhớ này chỉ để đừng nhắc lại một câu, không đáng làm
+   ứng dụng không mở lên được. */
+function userDataDir() {
+  try {
+    const dir = E && E.app && E.app.getPath ? E.app.getPath('userData') : null;
+    if (dir) return dir;
+  } catch (error) { /* rơi xuống dưới */ }
+  try { return require('os').tmpdir(); } catch (error) { return __dirname; }
+}
+
+/* Đọc chịu được mọi thứ: tệp chưa có, tệp rỗng, tệp hỏng, JSON lạ. Đây là
+   bộ nhớ phụ của một tính năng phụ — hỏng nó thì cùng lắm là nhắc lại một
+   lần, tuyệt đối không được làm ứng dụng không mở lên được. */
+function readSeen(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    const seen = data.seen;
+    return seen && typeof seen === 'object' && !Array.isArray(seen) ? seen : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+// Ghi hỏng thì thôi, không ném ra: nhắc lại một lần còn hơn một cửa sổ lỗi.
+function writeSeen(file, seen, now) {
+  const kept = {};
+  for (const key of Object.keys(seen || {})) {
+    const at = Number(seen[key]);
+    if (isFinite(at) && now - at < NUDGE_KEEP_MS) kept[key] = at;
+  }
+  try {
+    U.writeJson(file, { version: 1, seen: kept });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/* Lời nhắc nào đã tới lúc hiện.
+
+   `repeatMs` là phần duy nhất cần hiểu: quá bao lâu thì được nhắc LẠI về
+   cùng một khoá. 0 nghĩa là không bao giờ — dùng cho mọi thứ đã nằm trong
+   khoá của chính nó một ngày (`overdue:2026-10-13`), vì ngày mai khoá đã
+   khác nên chẳng cần luật nhắc lại nào cả.
+
+   Hàm này KHÔNG sửa `seen`. Nó chỉ trả về danh sách. Chỗ gọi mới là nơi
+   đánh dấu — và chỉ đánh dấu những cái THẬT SỰ đã hiện. Đánh dấu trước rồi
+   mới hiện là cách chắc chắn nhất để một lời nhắc biến mất mà không ai
+   từng nhìn thấy nó. */
+function dueNudges(list, seen, now) {
+  const out = [];
+  for (const item of list || []) {
+    if (!item || typeof item.key !== 'string' || !item.key) continue;
+    const last = Number((seen || {})[item.key]);
+    if (isFinite(last) && last > 0) {
+      const wait = Number(item.repeatMs) || 0;
+      if (wait <= 0) continue;
+      if (now - last < wait) continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
+/* Bong bóng khay. Trả về true/false để chỗ gọi biết có nên đánh dấu "đã
+   báo" hay không — đánh dấu một cái chưa từng hiện là mất nó luôn. */
+function showNudge(tray, item) {
+  if (!tray || !item) return false;
+  try {
+    tray.displayBalloon({ title: String(item.title || 'DevTrace'), content: String(item.body || '') });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/* Một nhịp: hỏi máy chủ, hiện những gì chưa hiện, nhớ lại.
+
+   Đang mở DevTrace và đang nhìn nó thì thôi không hiện bong bóng — che màn
+   hình của người đang nhìn đúng ứng dụng đó là làm ồn chứ không phải nhắc.
+   Và vì hàm này không đánh dấu những cái chưa hiện, lời nhắc đó sẽ hiện ở
+   nhịp sau, lúc huynh đã đi làm việc khác. */
+async function nudgeTick(state, desk, options) {
+  const opts = options || {};
+  const getJson = opts.getJson || Launch.getJson;
+  const file = opts.file;
+  const now = opts.now == null ? Date.now() : opts.now;
+  const path2 = '/api/nudges' + (opts.withRepos ? '?repos=1' : '');
+
+  let result = null;
+  try {
+    result = await getJson(desk, path2, opts.timeoutMs || 45000);
+  } catch (error) {
+    result = { ok: false, reason: String((error && error.message) || error) };
+  }
+  const list = result && result.ok && result.json && Array.isArray(result.json.nudges)
+    ? result.json.nudges : null;
+  if (!list) return { shown: [], error: (result && (result.reason || result.statusCode)) || 'không đọc được' };
+
+  const seen = opts.seen || (file ? readSeen(file) : {});
+  const due = dueNudges(list, seen, now);
+
+  const watching = !!(state && state.window && state.window.isVisible() && state.window.isFocused());
+  const shown = [];
+  if (!watching) {
+    for (const item of due) {
+      if (!showNudge(state && state.tray, item)) continue;
+      shown.push(item.key);
+      seen[item.key] = now;
+    }
+    if (shown.length && file) writeSeen(file, seen, now);
+  }
+  return { shown: shown, waiting: due.length - shown.length, list: list };
+}
+
+/* Vòng lặp. Nhịp RẺ hỏi thường xuyên; phần quét kho mã đi kèm thưa hơn
+   hẳn — nó tốn bốn lệnh git mỗi kho, và hỏi nó mỗi năm phút là tự tay bóp
+   nghẹt ổ đĩa của chính mình. */
+function nudgeSchedule(settings) {
+  const s = settings || {};
+  const poll = Math.max(1, Number(s.pollMinutes) || 5);
+  const repo = Math.max(poll, Number(s.repoEveryMinutes) || 30);
+  return {
+    pollMinutes: poll,
+    everyTicks: Math.max(1, Math.round(repo / poll)),
+    /* Nhịp ĐẦU chạy sớm hơn hẳn, nhưng không chạy ngay: ngay sau khi mở là
+       lúc lượt thu thập đang chạy, nên bằng chứng còn là bản cũ. Ba mươi
+       giây là quãng đủ để nó xong. Và mở máy lúc 21 giờ 30 mà phải đợi
+       thêm năm phút mới thấy tổng kết thì lời nhắc đã hụt đúng lúc nó có
+       ích nhất. */
+    firstDelayMs: 30000
+  };
+}
+
+/* Nhịp nào thì quét kèm cả kho mã. Tách ra khỏi vòng hẹn giờ để kiểm được
+   phép chia này mà không phải chạy một vòng hẹn giờ thật. */
+function nudgeWithRepos(tick, schedule) {
+  const every = (schedule && schedule.everyTicks) || 0;
+  return every > 0 && tick % every === 0;
+}
+
+function startNudgeTimer(state, desk, settings, seams) {
+  const opts = seams || {};
+  const setIntervalFn = opts.setInterval || setInterval;
+  const setTimeoutFn = opts.setTimeout || setTimeout;
+  const clearIntervalFn = opts.clearInterval || clearInterval;
+  const clearTimeoutFn = opts.clearTimeout || clearTimeout;
+  const schedule = nudgeSchedule(settings);
+  let tick = 0;
+
+  const run = () => {
+    tick++;
+    nudgeTick(state, desk, { file: opts.file, withRepos: nudgeWithRepos(tick, schedule) })
+      .catch(() => { /* máy chủ chết thì thôi, nhịp sau thử lại */ });
+  };
+
+  const timer = setIntervalFn(run, schedule.pollMinutes * 60000);
+  const first = setTimeoutFn(run, schedule.firstDelayMs);
+  return {
+    timer: timer,
+    first: first,
+    schedule: schedule,
+    stop: () => {
+      try { clearIntervalFn(timer); } catch (error) { /* thôi */ }
+      try { clearTimeoutFn(first); } catch (error) { /* thôi */ }
+    }
+  };
+}
+
 async function start() {
   const problem = launchProblem(process.env, !!E);
   if (problem) throw new Error(problem);
@@ -428,7 +622,10 @@ async function start() {
   const desk = Launch.desktopConfig(config);
   const targetUrl = Launch.baseUrl(desk);
 
-  const state = { window: null, tray: null, capture: null, quitting: false, ownsServer: false, notified: false };
+  const state = {
+    window: null, tray: null, capture: null, quitting: false, ownsServer: false,
+    notified: false, nudgeTimer: null
+  };
 
   if (!requestSingleInstance(app, () => revealWindow(state.window))) return;
 
@@ -442,6 +639,7 @@ async function start() {
      khác — không giành được nó nữa. */
   app.on('will-quit', () => {
     try { E.globalShortcut.unregisterAll(); } catch (error) { /* thôi */ }
+    if (state.nudgeTimer) { try { state.nudgeTimer.stop(); } catch (error) { /* thôi */ } }
   });
 
   await app.whenReady();
@@ -503,6 +701,18 @@ async function start() {
     collectNow(state, desk).catch(() => { /* không sao, lần thu sau sẽ bù */ });
   }
 
+  /* Nhắc việc chỉ có nghĩa khi có khay để hiện bong bóng, nên nó nằm trong
+     ứng dụng để bàn chứ không nằm trong máy chủ. Tắt trong cấu hình thì
+     không dựng vòng lặp nào cả — không hỏi, không tốn gì. */
+  const nudgeSettings = config.nudges || {};
+  if (nudgeSettings.enabled) {
+    state.nudgeTimer = startNudgeTimer(state, desk, nudgeSettings, {
+      file: seenPath(userDataDir()),
+      setInterval: setInterval, setTimeout: setTimeout,
+      clearInterval: clearInterval, clearTimeout: clearTimeout
+    });
+  }
+
   return { url: targetUrl, startedServer: state.ownsServer };
 }
 
@@ -546,5 +756,17 @@ module.exports = {
   captureWindowOptions: captureWindowOptions,
   capturePosition: capturePosition,
   captureHotkeyNote: captureHotkeyNote,
+  NUDGE_FILE: NUDGE_FILE,
+  NUDGE_KEEP_MS: NUDGE_KEEP_MS,
+  seenPath: seenPath,
+  userDataDir: userDataDir,
+  readSeen: readSeen,
+  writeSeen: writeSeen,
+  dueNudges: dueNudges,
+  showNudge: showNudge,
+  nudgeTick: nudgeTick,
+  nudgeSchedule: nudgeSchedule,
+  nudgeWithRepos: nudgeWithRepos,
+  startNudgeTimer: startNudgeTimer,
   start: start
 };

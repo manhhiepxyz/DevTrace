@@ -200,17 +200,16 @@ const SCAN_SCRIPT = path.join(__dirname, 'git-scan.js');
    lối chậm" một cách vô ích. */
 const SCAN_TIMEOUT_MS = 180000;
 
-/* Trả về `{ map, error }`, hoặc `null` khi KHÔNG thử quét song song:
-     - bài kiểm thử truyền khe cắm git (đường tuần tự là đường kiểm được);
-     - chỉ có một kho — song song chẳng lợi gì mà thêm một tiến trình. */
-function scanAll(repos, opts) {
-  if (opts && opts.runGit) return null;
-  const list = repos.filter((repo) => U.isDir(repo));
-  if (list.length < 2) return null;
+/* Gọi tiến trình quét và đọc câu trả lời. Một chỗ duy nhất biết cách nói
+   chuyện với nó — cả `scanAll` lẫn `scanCommands` đều đi qua đây, nên không
+   có chuyện một đường quên `windowsHide` rồi làm 212 cửa sổ đen nháy lên,
+   hay một đường quên `timeout` rồi treo máy chủ vô hạn.
 
+   Trả về `{ map, error }`. Không bao giờ ném lỗi. */
+function scanWith(payload) {
   let raw;
   try {
-    raw = execFileSync(process.execPath, [SCAN_SCRIPT, JSON.stringify({ repos: list })], {
+    raw = execFileSync(process.execPath, [SCAN_SCRIPT, JSON.stringify(payload)], {
       encoding: 'utf8',
       timeout: SCAN_TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
@@ -231,6 +230,31 @@ function scanAll(repos, opts) {
   const map = new Map();
   for (const item of parsed.repos) if (item && item.repo) map.set(item.repo, item);
   return { map: map, error: null };
+}
+
+/* Trả về `{ map, error }`, hoặc `null` khi KHÔNG thử quét song song:
+     - bài kiểm thử truyền khe cắm git (đường tuần tự là đường kiểm được);
+     - chỉ có một kho — song song chẳng lợi gì mà thêm một tiến trình. */
+function scanAll(repos, opts) {
+  if (opts && opts.runGit) return null;
+  const list = repos.filter((repo) => U.isDir(repo));
+  if (list.length < 2) return null;
+  return scanWith({ repos: list });
+}
+
+/* Cùng tiến trình quét, nhưng chạy một DANH SÁCH LỆNH TUỲ Ý cho mỗi kho.
+
+   `app/nudges.js` cần đúng bốn câu hỏi về mỗi kho, không phải tám câu của
+   `repohealth.repoSnapshot`. Đi chung con đường này để phần song song, phần
+   `windowsHide` và phần hết-giờ chỉ có một bản.
+
+   Vẫn giữ nguyên tắc "hỏng thì trả null": chỗ gọi quay về đường tuần tự,
+   hoặc không nhắc gì — chứ không bao giờ biến thành "mọi kho đều sạch". */
+function scanCommands(repos, commands, opts) {
+  if (opts && opts.runGit) return null;
+  const list = repos.filter((repo) => U.isDir(repo));
+  if (list.length < 2) return null;
+  return scanWith({ repos: list, commands: commands });
 }
 
 /* Rút từ một bản ghi quét sẵn ra ĐÚNG ba thứ mà đường tuần tự đọc được:
@@ -380,5 +404,5 @@ function collect(config, opts) {
 module.exports = {
   collect, discoverRepos, repoInfo, readCommits, readCommitsDetailed, workingTree,
   detectAuthors, matchesAuthor, parseLog, git, gitFull, EMPTY_REPO_RE,
-  parseWorkingTree, fromScan, scanAll, logArgs, BRANCH_ARGS, REMOTE_ARGS, STATUS_ARGS
+  parseWorkingTree, fromScan, scanAll, scanCommands, logArgs, BRANCH_ARGS, REMOTE_ARGS, STATUS_ARGS
 };

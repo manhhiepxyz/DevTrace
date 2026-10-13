@@ -4443,9 +4443,15 @@ function checkServerRoutes() {
         const needed = ['/api/plans', '/api/plans/task', '/api/plans/slot', '/api/plans/sprint',
           '/api/plans/inbox',
           '/api/repohealth', '/api/repohealth/refresh', '/api/fs/dirs',
-          '/api/mail', '/api/mail/refresh'];
+          '/api/mail', '/api/mail/refresh', '/api/nudges'];
         const absent = needed.filter((p) => serverSrc.indexOf("'" + p + "'") === -1);
-        check('mười đường dẫn mới có nguyên văn trong server.js', absent.length === 0, absent);
+        check('mười một đường dẫn mới có nguyên văn trong server.js', absent.length === 0, absent);
+        /* Quét kho là việc PHẢI CHỌN, kể cả ở đây: không có tham số thì máy
+           chủ không được quét. Đường dẫn này tự nó đã chạy trong tiến trình
+           riêng, nhưng tám chục tiến trình git thì vẫn phải có người xin. */
+        check('đường dẫn nhắc việc chỉ quét kho khi được xin rõ ràng',
+          serverSrc.indexOf("query.get('repos') === '1'") !== -1
+            && serverSrc.indexOf('Nudges.spawnNudges') !== -1);
         check('không có đường dẫn dự án riêng — khai dự án đi qua /api/config',
           serverSrc.indexOf("'/api/projects/") === -1);
         check('duyệt thư mục chỉ đọc, không có đường nào ghi vào máy', serverSrc.indexOf('listDirs') !== -1
@@ -4770,11 +4776,559 @@ function checkParallelGit() {
   });
 }
 
+/* =====================================================================
+   [8c] Lời nhắc trên khay — bốn loại, và những gì chúng KHÔNG được nói.
+
+   Chạy ngoại tuyến và không sinh tiến trình nào:
+     - `compute` nhận thẳng kho kế hoạch và bằng chứng qua khe cắm, nên
+       không đọc `data/` và không dựng lại bằng chứng;
+     - phần quét kho mã tắt hẳn (`repos: false`), trừ nhóm kiểm riêng cho
+       nó — ở đó khe cắm `scanRepos` thay cho tiến trình quét thật;
+     - phần khay dùng một khay giả và một hàm `getJson` giả.
+
+   Điều đáng canh nhất không phải "có nhắc hay không" mà là ba câu KHÔNG
+   được nói ra: buổi `no-evidence` không được thành lời nhắc, ngày không
+   đọc được dấu vết không được thành "0 phút", và quét kho hỏng không được
+   thành "mọi kho đều sạch".
+   ===================================================================== */
+
+const Nudge = require('../app/nudges');
+const NudgesRun = require('../app/nudges-run');
+
+const NUDGE_DAY = '2026-11-20';             // thứ Sáu, cùng ngày với fixture [14b]
+const NUDGE_MIDDAY = Date.parse('2026-11-20T15:00:00');
+const NUDGE_LATE = Date.parse('2026-11-20T22:00:00');
+const NUDGE_SLOT_ID = 'buoi-thu-sau';
+
+/* Cấu hình riêng cho nhóm này: bật git (để nhánh kho mã chạy được) và trỏ
+   vào một thư mục riêng, không đụng fixture nào khác. */
+const nudgeConfig = Object.assign({}, config, {
+  dataDir: path.join(TEST_DIR, 'nudge'),
+  sources: Object.assign({}, config.sources, {
+    git: Object.assign({}, config.sources.git, { enabled: true, autoDiscover: { enabled: false, roots: [], maxDepth: 3, maxRepos: 40 } })
+  })
+});
+fs.mkdirSync(nudgeConfig.dataDir, { recursive: true });
+
+function nudgeStore(tasks, sessions, corrupt) {
+  return {
+    tasks: { tasks: tasks || [] },
+    timetable: { principle: '', sessions: sessions || [] },
+    inbox: { items: [] },
+    sprints: [],
+    corrupt: corrupt || {}
+  };
+}
+
+// Một buổi 09:00–11:00 thứ Sáu, và một buổi 14:00–16:00 thứ Ba.
+function nudgeSessions() {
+  return [
+    { id: NUDGE_SLOT_ID, weekday: 5, start: '09:00', end: '11:00', title: 'Buổi sáng', kind: 'deep' },
+    { id: 'buoi-thu-ba', weekday: 2, start: '14:00', end: '16:00', title: 'Buổi thứ Ba', kind: 'admin' }
+  ];
+}
+
+// Sự kiện đủ để `activitySpans` dựng được một khoảng hoạt động thật.
+function nudgeEvent(ts, minutes) {
+  return { ts: ts, source: 'codex', kind: 'turn', durationMs: minutes * 60000, weight: 3 };
+}
+
+function nudgeEvidence(events, minutes) {
+  const list = events || [];
+  return {
+    day: NUDGE_DAY,
+    work: list,
+    minutes: minutes || 0,
+    totals: { events: list.length, commits: 0, aiSessions: 0 }
+  };
+}
+
+function nudgeKinds(list) {
+  return list.map((n) => n.kind + '/' + n.level).join(', ');
+}
+
+/* Trạng thái THẬT của một buổi theo đúng đường đối chiếu mà giao diện dùng.
+   Cần hàm này để hai phép kiểm ÂM bên dưới có nghĩa: "không có lời nhắc về
+   buổi" chỉ đáng tin khi biết chắc rằng buổi đó RƠI VÀO đúng trạng thái bị
+   lọc, chứ không phải vì nó không tồn tại. */
+function nudgeSlotStatus(day, evidence, store, now, id) {
+  const sched = Plans.schedule(nudgeConfig, day, evidence, { store: store, now: now });
+  const row = sched.sessions.filter((s) => s.id === id)[0];
+  return row ? row.status : null;
+}
+
+function scanRec(repo, status, upstream) {
+  return {
+    repo: repo, isRepo: true,
+    results: [
+      { ok: true, out: 'main\n', err: '' },
+      { ok: true, out: 'git@vidu:ai/do.git\n', err: '' },
+      { ok: true, out: status, err: '' },
+      { ok: upstream != null, out: upstream == null ? '' : upstream, err: '' }
+    ]
+  };
+}
+
+// `n` dòng "?? tệp" — ngưỡng "còn nhiều thay đổi chưa ghi" là 20.
+function manyChanges(n) {
+  const lines = [];
+  for (let i = 0; i < n; i++) lines.push('?? tep-' + i + '.txt');
+  return lines.join('\n') + '\n';
+}
+
+function checkNudges() {
+  section('[8c] Lời nhắc trên khay');
+
+  /* --- 1. Việc quá hạn ---------------------------------------------- */
+
+  const overdueTasks = [
+    { id: 't1', title: 'Nộp báo cáo', horizon: 'day', status: 'open', dueDay: '2026-11-10' },
+    { id: 't2', title: 'Trả lời khách', horizon: 'week', status: 'open', dueDay: '2026-11-01' },
+    { id: 't3', title: 'Sửa lỗi in', horizon: 'day', status: 'open', dueDay: '2026-11-18' },
+    { id: 't4', title: 'Việc đã xong', horizon: 'day', status: 'done', dueDay: '2026-11-01' },
+    { id: 't5', title: 'Việc lặp', horizon: 'recurring', status: 'open', recur: { freq: 'daily' } },
+    { id: 't6', title: 'Chưa tới hạn', horizon: 'day', status: 'open', dueDay: '2026-11-25' }
+  ];
+
+  const overdue = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore(overdueTasks, []),
+    evidence: nudgeEvidence([], 0)
+  });
+
+  const od = overdue.nudges.filter((n) => n.kind === 'overdue');
+  check('ba việc quá hạn gom thành ĐÚNG MỘT lời nhắc', od.length === 1, nudgeKinds(overdue.nudges));
+  check('việc đã xong, việc lặp và việc chưa tới hạn đều không tính là quá hạn',
+    !!od[0] && od[0].title === '3 việc đã quá hạn', od[0] && od[0].title);
+  check('quá hạn từ ba việc trở lên thì mức là nặng', !!od[0] && od[0].level === 'bad', od[0] && od[0].level);
+  check('lời nhắc quá hạn nói ra việc cũ nhất đã bao nhiêu ngày',
+    !!od[0] && /Cũ nhất: 19 ngày/.test(od[0].body), od[0] && od[0].body);
+  check('lời nhắc quá hạn kèm hạn của từng việc, không chỉ tên',
+    !!od[0] && /hạn 2026-11-10/.test(od[0].body) && /hạn 2026-11-18/.test(od[0].body), od[0] && od[0].body);
+  check('khoá quá hạn mang theo ngày, nên hôm sau là một khoá khác',
+    !!od[0] && od[0].key === 'overdue:' + NUDGE_DAY, od[0] && od[0].key);
+  check('lời nhắc quá hạn KHÔNG nhắc lại trong cùng một ngày',
+    !!od[0] && od[0].repeatMs === 0, od[0] && od[0].repeatMs);
+
+  const oneOverdue = Nudge.overdueNudges(nudgeStore([overdueTasks[0]], []), NUDGE_DAY, {});
+  check('một việc quá hạn thì mức chỉ là nhắc, không phải nặng',
+    oneOverdue.length === 1 && oneOverdue[0].level === 'warn', oneOverdue[0] && oneOverdue[0].level);
+  check('không có việc quá hạn thì không có lời nhắc nào',
+    Nudge.overdueNudges(nudgeStore([overdueTasks[5]], []), NUDGE_DAY, {}).length === 0);
+
+  /* --- 2. Buổi trôi qua mà không có dấu vết khớp --------------------- */
+
+  /* Ngày KHÔNG đọc được dấu vết nào. Đây là chốt chặn quan trọng nhất của
+     cả tệp: mọi buổi đều mang trạng thái `no-evidence`, và biến nó thành
+     "buổi này chưa làm" là buộc tội huynh về một việc mà chính chương trình
+     không nhìn thấy. */
+  const quiet = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore([], nudgeSessions()),
+    evidence: nudgeEvidence([], 0)
+  });
+  check('ngày không đọc được dấu vết thì buổi mang trạng thái "không có dấu vết", không phải "bỏ lỡ"',
+    nudgeSlotStatus(NUDGE_DAY, nudgeEvidence([], 0), nudgeStore([], nudgeSessions()), NUDGE_LATE, NUDGE_SLOT_ID) === 'no-evidence');
+  check('ngày không đọc được dấu vết thì KHÔNG có lời nhắc nào về buổi',
+    quiet.nudges.every((n) => n.kind !== 'slot'), nudgeKinds(quiet.nudges));
+  const quietEvening = quiet.nudges.filter((n) => n.kind === 'evening');
+  check('ngày không đọc được dấu vết vẫn có tổng kết, và nói thẳng là không đọc được gì',
+    quietEvening.length === 1 && /không đọc được dấu vết nào/.test(quietEvening[0].title),
+    quietEvening[0] && quietEvening[0].title);
+  check('tổng kết ấy KHÔNG được nói "0 phút" — vắng dữ liệu không phải là không làm gì',
+    quietEvening.length === 1 && quietEvening[0].body.indexOf('0 phút') === -1, quietEvening[0] && quietEvening[0].body);
+
+  /* Ngày CÓ dấu vết, nhưng dấu vết nằm ngoài khung 09:00–11:00. */
+  const missedRun = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore([], nudgeSessions()),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T15:00:00'), 30)], 30)
+  });
+  const slotMissed = missedRun.nudges.filter((n) => n.kind === 'slot');
+  check('buổi đã qua mà dấu vết không khớp thì có ĐÚNG MỘT lời nhắc, cho đúng buổi thứ Sáu',
+    slotMissed.length === 1 && /Buổi sáng/.test(slotMissed[0].title), nudgeKinds(missedRun.nudges));
+  check('khoá của lời nhắc buổi mang theo ngày và mã buổi',
+    slotMissed.length === 1 && slotMissed[0].key === 'slot:' + NUDGE_DAY + ':' + NUDGE_SLOT_ID,
+    slotMissed[0] && slotMissed[0].key);
+  check('lời nhắc buổi nói rõ là KHÔNG có nghĩa huynh không làm gì',
+    slotMissed.length === 1 && /Không có nghĩa là huynh không làm gì/.test(slotMissed[0].body),
+    slotMissed[0] && slotMissed[0].body);
+  check('mọi con số đối chiếu đều kèm câu "ước lượng"',
+    slotMissed.length === 1 && /ước lượng/.test(slotMissed[0].body), slotMissed[0] && slotMissed[0].body);
+  check('buổi thứ Ba không hiện trong lời nhắc của thứ Sáu',
+    missedRun.nudges.every((n) => n.title.indexOf('Buổi thứ Ba') === -1), nudgeKinds(missedRun.nudges));
+
+  /* Vừa qua khỏi giờ kết thúc vài phút: bộ thu thập có thể chưa kịp ghi, nên
+     nhắc lúc này là nhắc nhầm. */
+  const tooSoonEvidence = nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T08:00:00'), 30)], 30);
+  const tooSoonStore = nudgeStore([], nudgeSessions());
+  const tooSoonNow = Date.parse('2026-11-20T11:05:00');
+  const tooSoon = Nudge.compute(nudgeConfig, {
+    now: tooSoonNow, repos: false, store: tooSoonStore, evidence: tooSoonEvidence
+  });
+  check('buổi vừa kết thúc đã được đối chiếu là "bỏ lỡ" — tức là nó CÓ đáng nhắc',
+    nudgeSlotStatus(NUDGE_DAY, tooSoonEvidence, tooSoonStore, tooSoonNow, NUDGE_SLOT_ID) === 'missed');
+  check('buổi vừa kết thúc chưa qua thời gian ân hạn thì chưa nhắc',
+    tooSoon.nudges.every((n) => n.kind !== 'slot'), nudgeKinds(tooSoon.nudges));
+
+  /* Buổi có khớp một phần: đáng nói, nhưng phải nói ở mức nhẹ và kèm số. */
+  const partialRun = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore([], nudgeSessions()),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T10:50:00'), 10)], 10)
+  });
+  const slotPartial = partialRun.nudges.filter((n) => n.kind === 'slot');
+  check('buổi khớp một phần thì nhắc ở mức nhẹ, kèm số phút khớp trên số dự kiến',
+    slotPartial.length === 1 && slotPartial[0].level === 'info' && /10\/120 phút/.test(slotPartial[0].body),
+    slotPartial[0] && slotPartial[0].body);
+
+  /* Buổi đã khớp đủ thì không có gì để nói. */
+  const doneRun = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore([], nudgeSessions()),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T09:00:00'), 120)], 120)
+  });
+  check('buổi đã khớp đủ thì không nhắc gì về buổi',
+    doneRun.nudges.every((n) => n.kind !== 'slot'), nudgeKinds(doneRun.nudges));
+
+  /* --- 3. Tổng kết cuối ngày ---------------------------------------- */
+
+  const beforeEvening = Nudge.compute(nudgeConfig, {
+    now: Date.parse('2026-11-20T20:00:00'), repos: false,
+    store: nudgeStore([], nudgeSessions()),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T15:00:00'), 30)], 30)
+  });
+  check('chưa tới giờ tổng kết thì chưa có tổng kết',
+    beforeEvening.nudges.every((n) => n.kind !== 'evening'), nudgeKinds(beforeEvening.nudges));
+
+  const evening = missedRun.nudges.filter((n) => n.kind === 'evening');
+  check('qua giờ tổng kết thì có ĐÚNG MỘT tổng kết',
+    evening.length === 1, nudgeKinds(missedRun.nudges));
+  check('tổng kết nói rõ "phút có dấu vết" không phải thời gian ngồi trước máy',
+    evening.length === 1 && /không phải thời gian ngồi trước máy/.test(evening[0].body),
+    evening[0] && evening[0].body);
+  check('tổng kết kèm số buổi đã đối chiếu',
+    evening.length === 1 && /buổi khớp phần lớn thời lượng/.test(evening[0].body), evening[0] && evening[0].body);
+  check('khoá tổng kết mang theo ngày, và không nhắc lại trong ngày',
+    evening.length === 1 && evening[0].key === 'evening:' + NUDGE_DAY && evening[0].repeatMs === 0,
+    evening[0] && evening[0].key);
+
+  /* --- 4. Tắt từng loại, và kế hoạch hỏng --------------------------- */
+
+  const onlyOverdue = Object.assign({}, nudgeConfig, {
+    nudges: Object.assign({}, nudgeConfig.nudges, {
+      kinds: { overdue: true, slot: false, repo: false, evening: false, plan: false }
+    })
+  });
+  const off = Nudge.compute(onlyOverdue, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore(overdueTasks, nudgeSessions()),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T15:00:00'), 30)], 30)
+  });
+  check('tắt một loại thì loại đó không bao giờ được dựng ra',
+    off.nudges.length > 0 && off.nudges.every((n) => n.kind === 'overdue'), nudgeKinds(off.nudges));
+
+  const allOff = Nudge.compute(Object.assign({}, nudgeConfig, {
+    nudges: Object.assign({}, nudgeConfig.nudges, { enabled: false })
+  }), { now: NUDGE_LATE, repos: false, store: nudgeStore(overdueTasks, nudgeSessions()), evidence: nudgeEvidence([], 0) });
+  check('tắt hẳn nhắc việc thì không dựng gì và nói ra là đang tắt',
+    allOff.nudges.length === 0 && /đang tắt/.test(allOff.notes.join(' ')), allOff.notes);
+
+  const corruptRun = Nudge.compute(nudgeConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore(overdueTasks, nudgeSessions(), {
+      tasks: { file: path.join(nudgeConfig.dataDir, 'plans', 'tasks.json'), reason: 'JSON hỏng', backup: null }
+    }),
+    evidence: nudgeEvidence([nudgeEvent(Date.parse('2026-11-20T15:00:00'), 30)], 30)
+  });
+  check('tệp kế hoạch hỏng là lời nhắc NẶNG NHẤT, và nói rõ là đang từ chối ghi',
+    corruptRun.nudges[0].kind === 'plan' && corruptRun.nudges[0].level === 'bad'
+      && /TỪ CHỐI GHI/.test(corruptRun.nudges[0].body), corruptRun.nudges[0]);
+  check('lời nhắc nặng đứng trước lời nhắc nhẹ',
+    corruptRun.nudges[0].level === 'bad'
+      && corruptRun.nudges.every((n, i, all) => i === 0 || all[i - 1].level === 'bad' || n.level !== 'bad'),
+    nudgeKinds(corruptRun.nudges));
+
+  /* --- 5. Kho mã: dựng lại khe cắm `run` từ bản ghi quét ------------- */
+
+  const healthCommands = Nudge.HEALTH_COMMANDS.map((args) => args.join(' '));
+  const fakeMap = new Map();
+  const fromScan = Nudge.runFromScan(fakeMap, Nudge.HEALTH_COMMANDS);
+  check('khe cắm đọc lại bản ghi quét: kho không có trong bản ghi thì trả null, không bịa chuỗi rỗng',
+    fromScan('C:/khong-co', Git.STATUS_ARGS) === null);
+  fakeMap.set('C:/co', scanRec('C:/co', manyChanges(3), '0\t2\n'));
+  check('khe cắm trả lại nguyên văn chuỗi git in ra cho đúng câu hỏi',
+    fromScan('C:/co', Git.STATUS_ARGS) === manyChanges(3)
+      && fromScan('C:/co', RepoHealth.UPSTREAM_ARGS) === '0\t2\n', fromScan('C:/co', Git.STATUS_ARGS));
+  check('lệnh không nằm trong bản ghi thì trả null',
+    fromScan('C:/co', ['log', '-1']) === null);
+  fakeMap.set('C:/hong', { repo: 'C:/hong', isRepo: true, results: [{ ok: false, out: '', err: 'hết giờ' }] });
+  check('lệnh hỏng trong bản ghi thì trả null, giống hệt git thật khi đọc hụt',
+    fromScan('C:/hong', Git.BRANCH_ARGS) === null);
+
+  /* --- 6. Kho mã: nhắc gom, và không nhắc khi quét hỏng -------------- */
+
+  const repoA = path.join(TEST_DIR, 'nudge-kho-a');
+  const repoB = path.join(TEST_DIR, 'nudge-kho-b');
+  const repoC = path.join(TEST_DIR, 'nudge-kho-c');
+  for (const dir of [repoA, repoB, repoC]) fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+
+  const repoConfig = Object.assign({}, nudgeConfig, {
+    sources: Object.assign({}, nudgeConfig.sources, {
+      git: Object.assign({}, nudgeConfig.sources.git, { enabled: true, repos: [repoA, repoB, repoC], autoDiscover: { enabled: false, roots: [], maxDepth: 3, maxRepos: 40 } })
+    })
+  });
+
+  const repoMap = new Map();
+  /* `rev-list --left-right --count @{upstream}...HEAD` in ra "trái phải":
+     trái là số commit CHỈ có ở remote (chưa kéo về), phải là số commit chỉ
+     có ở máy (chưa đẩy lên). Kho A tụt lại 5, kho B tách hẳn (2 và 3). */
+  repoMap.set(repoA, scanRec(repoA, manyChanges(30), '5\t0\n'));
+  repoMap.set(repoB, scanRec(repoB, manyChanges(25), '2\t3\n'));
+  repoMap.set(repoC, scanRec(repoC, manyChanges(2), null));
+
+  let askedCommands = null;
+  const repoRun = Nudge.compute(repoConfig, {
+    now: NUDGE_LATE, repos: true,
+    store: nudgeStore([], []),
+    evidence: nudgeEvidence([], 0),
+    scanRepos: (chosen, commands) => { askedCommands = { chosen: chosen.slice(), commands: commands }; return { map: repoMap, error: null }; }
+  });
+
+  check('phần kho mã hỏi git ĐÚNG bốn câu, không hơn',
+    !!askedCommands && askedCommands.commands.length === 4
+      && askedCommands.commands.map((a) => a.join(' ')).join('|') === healthCommands.join('|'),
+    askedCommands && askedCommands.commands.map((a) => a.join(' ')));
+  check('hai kho còn nhiều thay đổi chưa ghi gom thành ĐÚNG MỘT lời nhắc',
+    repoRun.nudges.filter((n) => n.key === 'repo:dirty').length === 1, nudgeKinds(repoRun.nudges));
+  const dirty = repoRun.nudges.filter((n) => n.key === 'repo:dirty')[0];
+  check('lời nhắc kho bẩn kể tên từng kho kèm số tệp',
+    !!dirty && dirty.body.indexOf('nudge-kho-a') !== -1 && /\(30 tệp\)/.test(dirty.body), dirty && dirty.body);
+  check('lời nhắc kho nhắc lại được, nhưng thưa — theo repoRepeatMinutes',
+    !!dirty && dirty.repeatMs === 360 * 60000, dirty && dirty.repeatMs);
+  const behind = repoRun.nudges.filter((n) => n.key === 'repo:behind')[0];
+  check('kho tụt lại sau remote được nhắc riêng',
+    !!behind && behind.body.indexOf('nudge-kho-a') !== -1, behind && behind.body);
+  check('kho vừa tụt lại vừa có commit chưa đẩy thì mức là nặng — nó đã tách hẳn khỏi remote',
+    !!behind && behind.level === 'bad' && /TÁCH HẲN/.test(behind.body), behind && behind.level);
+  check('kho không có remote thì không bị coi là tụt lại',
+    !!behind && behind.body.indexOf('nudge-kho-c') === -1, behind && behind.body);
+
+  const scanFailed = Nudge.compute(repoConfig, {
+    now: NUDGE_LATE, repos: true,
+    store: nudgeStore([], []),
+    evidence: nudgeEvidence([], 0),
+    scanRepos: () => ({ map: null, error: 'hết giờ' })
+  });
+  check('quét kho hỏng thì KHÔNG nhắc gì về kho, và nói ra là không quét được',
+    scanFailed.nudges.every((n) => n.kind !== 'repo') && /không quét được/.test(scanFailed.notes.join(' ')),
+    scanFailed.notes);
+  check('quét kho hỏng thì không có lời nhắc nào nói kho đã sạch',
+    scanFailed.nudges.every((n) => n.key.indexOf('repo:') !== 0), nudgeKinds(scanFailed.nudges));
+
+  const noSweep = Nudge.compute(repoConfig, {
+    now: NUDGE_LATE, repos: false,
+    store: nudgeStore([], []), evidence: nudgeEvidence([], 0)
+  });
+  check('không xin quét kho thì không quét, và cũng không nhắc gì về kho',
+    noSweep.nudges.every((n) => n.kind !== 'repo') && noSweep.notes.length === 0,
+    nudgeKinds(noSweep.nudges));
+
+  /* --- 7. Phía ứng dụng để bàn: nhớ cái gì đã báo ------------------- */
+
+  const seenFile = path.join(TEST_DIR, 'nudge-seen', 'seen.json');
+  fs.mkdirSync(path.dirname(seenFile), { recursive: true });
+  check('chưa có tệp nhớ thì coi như chưa báo gì', Object.keys(Desktop.readSeen(seenFile)).length === 0);
+  fs.writeFileSync(seenFile, '{ khong phai json', 'utf8');
+  check('tệp nhớ hỏng thì coi như chưa báo gì, KHÔNG làm ứng dụng không mở lên được',
+    Object.keys(Desktop.readSeen(seenFile)).length === 0);
+
+  const nowSeen = 1000 * 1000 * 1000;
+  Desktop.writeSeen(seenFile, { moi: nowSeen, cu: nowSeen - Desktop.NUDGE_KEEP_MS - 1 }, nowSeen);
+  const back = Desktop.readSeen(seenFile);
+  check('tệp nhớ giữ lại khoá vừa báo', back.moi === nowSeen, back);
+  check('tệp nhớ quên khoá cũ hơn ba mươi ngày, để nó không phình mãi',
+    back.cu === undefined, back);
+
+  /* --- 8. Lời nhắc nào đã tới lúc hiện ------------------------------ */
+
+  const seen = {};
+  const duo = [
+    Nudge.nudge('mot-lan', 'overdue', 'warn', 'A', '', 0),
+    Nudge.nudge('nhac-lai', 'repo', 'warn', 'B', '', 3600000),
+    { kind: 'thieu-khoa' },
+    null
+  ];
+  const firstDue = Desktop.dueNudges(duo, seen, 5000);
+  check('chưa báo lần nào thì mọi lời nhắc đều tới lúc hiện',
+    firstDue.length === 2, firstDue.map((n) => n.key));
+  check('mục thiếu khoá bị bỏ qua thay vì làm vỡ vòng lặp', firstDue.every((n) => !!n.key));
+  check('hàm chọn KHÔNG tự đánh dấu đã báo — đánh dấu là việc của chỗ hiện bong bóng',
+    Object.keys(seen).length === 0, seen);
+
+  seen['mot-lan'] = 5000;
+  seen['nhac-lai'] = 5000;
+  check('loại chỉ nhắc một lần trong ngày thì thôi, không nhắc lại',
+    Desktop.dueNudges(duo, seen, 9000).length === 0, Desktop.dueNudges(duo, seen, 9000));
+  check('loại có hạn nhắc lại thì chỉ nhắc lại sau khi hết hạn',
+    Desktop.dueNudges(duo, seen, 5000 + 3599999).length === 0
+      && Desktop.dueNudges(duo, seen, 5000 + 3600000).length === 1,
+    Desktop.dueNudges(duo, seen, 5000 + 3600000));
+
+  /* --- 9. Nhịp: rẻ thì thường xuyên, quét kho thì thưa -------------- */
+
+  const sched = Desktop.nudgeSchedule({ pollMinutes: 5, repoEveryMinutes: 30 });
+  check('nhịp hỏi rẻ là năm phút', sched.pollMinutes === 5, sched);
+  check('quét kho ba mươi phút một lần, tức sáu nhịp mới quét một lần',
+    sched.everyTicks === 6 && Desktop.nudgeWithRepos(6, sched) === true
+      && Desktop.nudgeWithRepos(5, sched) === false && Desktop.nudgeWithRepos(12, sched) === true,
+    sched);
+  check('nhịp đầu chạy sớm hơn, nhưng không chạy ngay lúc đang thu thập',
+    sched.firstDelayMs === 30000, sched.firstDelayMs);
+  check('cấu hình nhịp hỏng thì rơi về mặc định, không sinh ra nhịp vô nghĩa',
+    Desktop.nudgeSchedule({ pollMinutes: 0, repoEveryMinutes: 'abc' }).pollMinutes === 5
+      && Desktop.nudgeSchedule({ pollMinutes: 0, repoEveryMinutes: 'abc' }).everyTicks === 6
+      && Desktop.nudgeSchedule({}).pollMinutes === 5,
+    Desktop.nudgeSchedule({ pollMinutes: 0, repoEveryMinutes: 'abc' }));
+  check('nhịp quét bằng 0 thì không bao giờ quét, chứ không chia cho 0 ra NaN',
+    Desktop.nudgeWithRepos(0, { everyTicks: 0 }) === false
+      && Desktop.nudgeWithRepos(5, { everyTicks: 0 }) === false);
+  check('quét kho dày hơn nhịp hỏi cũng không làm nó quét mỗi nhịp',
+    Desktop.nudgeSchedule({ pollMinutes: 30, repoEveryMinutes: 5 }).everyTicks === 1);
+
+  const cleared = [];
+  const timers = Desktop.startNudgeTimer({ tray: null, window: null }, {}, { pollMinutes: 5, repoEveryMinutes: 30 }, {
+    file: null,
+    setInterval: () => 'nhip-deu',
+    setTimeout: () => 'nhip-dau',
+    clearInterval: (h) => { cleared.push(h); },
+    clearTimeout: (h) => { cleared.push(h); }
+  });
+  check('vòng nhắc việc hẹn ĐÚNG hai lần: một nhịp đều và một nhịp đầu',
+    timers.timer === 'nhip-deu' && timers.first === 'nhip-dau', timers.schedule);
+  timers.stop();
+  check('thoát ứng dụng thì cả hai nhịp được nhả',
+    cleared.length === 2 && cleared.indexOf('nhip-deu') !== -1 && cleared.indexOf('nhip-dau') !== -1, cleared);
+
+  /* --- 10. Bong bóng: hiện, nhớ, và không hiện khi đang nhìn -------- */
+
+  const tray = { balloons: [], displayBalloon(b) { this.balloons.push(b); } };
+  const tickState = { tray: tray, window: { isVisible: () => false, isFocused: () => false } };
+  const tickFile = path.join(TEST_DIR, 'nudge-seen', 'tick.json');
+  const said = [];
+  const fakeGet = (desk, urlPath) => {
+    said.push(urlPath);
+    return Promise.resolve({ ok: true, statusCode: 200, json: { nudges: [Nudge.nudge('overdue:' + NUDGE_DAY, 'overdue', 'bad', 'Ba việc quá hạn', 'Nộp báo cáo', 0)] } });
+  };
+
+  return Desktop.nudgeTick(tickState, {}, { file: tickFile, getJson: fakeGet, now: 7000 })
+    .then((out) => {
+      check('hỏi máy chủ ở đường dẫn nhắc việc, và mặc định KHÔNG xin quét kho',
+        said.length === 1 && said[0] === '/api/nudges', said);
+      check('chưa báo thì hiện bong bóng và ghi lại là đã báo',
+        out.shown.length === 1 && tray.balloons.length === 1
+          && Desktop.readSeen(tickFile)['overdue:' + NUDGE_DAY] === 7000, out);
+      check('bong bóng mang tiêu đề và nội dung của lời nhắc',
+        tray.balloons[0].title === 'Ba việc quá hạn' && tray.balloons[0].content === 'Nộp báo cáo',
+        tray.balloons[0]);
+      return Desktop.nudgeTick(tickState, {}, { file: tickFile, getJson: fakeGet, now: 8000 });
+    })
+    .then((again) => {
+      check('đã báo rồi thì không hiện lại bong bóng',
+        again.shown.length === 0 && tray.balloons.length === 1, again);
+      return Desktop.nudgeTick(tickState, {}, { file: tickFile, getJson: fakeGet, now: 9000, withRepos: true });
+    })
+    .then((withRepos) => {
+      check('xin quét kho thì đường dẫn nói rõ ra, không quét lặng lẽ',
+        said[said.length - 1] === '/api/nudges?repos=1', said);
+      return Desktop.nudgeTick(tickState, {}, { file: tickFile, getJson: fakeGet, now: 9000 });
+    })
+    .then(() => {
+      /* Đang mở DevTrace và đang nhìn nó: bong bóng che màn hình của người
+         đang nhìn đúng ứng dụng đó. Nhưng KHÔNG được đánh dấu là đã báo —
+         đánh dấu thì lời nhắc biến mất mà không ai từng thấy. */
+      const watching = { tray: tray, window: { isVisible: () => true, isFocused: () => true } };
+      const before = tray.balloons.length;
+      return Desktop.nudgeTick(watching, {}, { file: tickFile, getJson: fakeGet, now: 10000, seen: {} })
+        .then((out) => {
+          check('đang nhìn DevTrace thì không hiện bong bóng',
+            out.shown.length === 0 && tray.balloons.length === before, out);
+          check('bong bóng không hiện thì cũng KHÔNG đánh dấu là đã báo',
+            Object.keys(Desktop.readSeen(tickFile)).indexOf('overdue:' + NUDGE_DAY) !== -1
+              && out.waiting === 1, out);
+        });
+    })
+    .then(() => {
+      // Máy chủ trả lời hỏng: vòng nhắc việc phải im lặng chịu được, không ném ra.
+      return Desktop.nudgeTick(tickState, {}, {
+        file: tickFile, now: 11000,
+        getJson: () => Promise.resolve({ ok: false, reason: 'ECONNREFUSED' })
+      });
+    })
+    .then((broken) => {
+      check('máy chủ trả lời hỏng thì không hiện gì và không ném ra ngoài',
+        broken.shown.length === 0 && !!broken.error, broken);
+
+      /* --- 11. Chỗ nhớ không được nằm trong kho bằng chứng ----------- */
+      const seenDir = path.resolve(Desktop.userDataDir());
+      check('chỗ nhớ "đã báo chưa" KHÔNG nằm trong kho bằng chứng của huynh',
+        seenDir.indexOf(path.resolve(ROOT, 'data')) !== 0, seenDir);
+      check('tên tệp nhớ cố định, và đi kèm thư mục dữ liệu riêng của ứng dụng',
+        Desktop.NUDGE_FILE === 'nudges-seen.json'
+          && path.basename(Desktop.seenPath(Desktop.userDataDir())) === 'nudges-seen.json',
+        Desktop.seenPath(Desktop.userDataDir()));
+
+      /* --- 12. Tiến trình con của máy chủ ---------------------------- */
+      const childDir = path.join(TEST_DIR, 'nudge-con');
+      fs.mkdirSync(childDir, { recursive: true });
+      const childConfig = Object.assign({}, config, { dataDir: childDir });
+      const realLoad = C.load;
+      const realWrite = process.stdout.write;
+
+      function runNudgeChild(rawArg) {
+        const written = [];
+        C.load = () => childConfig;
+        process.stdout.write = function (text) { written.push(String(text)); return true; };
+        let code = null;
+        let threw = null;
+        try { code = NudgesRun.main(['node', 'nudges-run.js', rawArg]); } catch (error) { threw = error.message; }
+        process.stdout.write = realWrite;
+        C.load = realLoad;
+        let parsed = null;
+        try { parsed = JSON.parse(written.join('')); } catch (error) { parsed = null; }
+        return { code: code, threw: threw, parsed: parsed, pieces: written.length };
+      }
+
+      /* Không truyền tham số: đường chạy thật, không quét kho. MẤT khoảng
+         một giây vì phải đọc kho sự kiện rỗng — nhưng đây là phép kiểm duy
+         nhất chứng minh được rằng mặc định KHÔNG quét tám chục tiến trình
+         git, và điều đó đáng một giây. */
+      const plain = runNudgeChild(undefined);
+      check('tiến trình con đọc lời nhắc đi hết đường rồi thoát sạch',
+        plain.threw === null && plain.code === 0, plain.threw || plain.code);
+      check('tiến trình con in ra ĐÚNG MỘT đối tượng JSON, không kèm chữ nào khác',
+        plain.pieces === 1 && !!plain.parsed && plain.parsed.ok === true, plain.pieces);
+      check('kết quả có đủ ngày, thời điểm và danh sách lời nhắc',
+        !!plain.parsed && /^\d{4}-\d{2}-\d{2}$/.test(plain.parsed.day)
+          && typeof plain.parsed.now === 'number' && Array.isArray(plain.parsed.nudges),
+        plain.parsed);
+      check('không xin quét kho thì tiến trình con KHÔNG quét kho lần nào',
+        !!plain.parsed && plain.parsed.notes.length === 0 && plain.parsed.nudges.every((n) => n.kind !== 'repo'),
+        plain.parsed && plain.parsed.notes);
+
+      const badArgNudge = runNudgeChild('{khong-phai-json');
+      check('tham số hỏng thì tiến trình con từ chối, không chạy bừa',
+        badArgNudge.code === 1 && !!badArgNudge.parsed && badArgNudge.parsed.ok === false
+          && /không đọc được/i.test(badArgNudge.parsed.error), badArgNudge.parsed);
+      check('tham số hỏng thì không trả về danh sách lời nhắc nào',
+        !(badArgNudge.parsed && badArgNudge.parsed.nudges));
+    });
+}
+
 /* Phần tắt-máy-chủ của mục [12] và phần bật-máy-chủ của app Electron phải
    chạy trước: chúng bất đồng bộ, và cả tệp này là CommonJS nên không có await
    ở cấp cao nhất. Chạy chúng ở đây để mọi kiểm tra bất đồng bộ nằm chung một
-   dây, và để hỏng ở đâu cũng báo ra. */
-checkStopGuards().then(function () {
+   dây, và để hỏng ở đâu cũng báo ra. */checkStopGuards().then(function () {
   return checkEnsureServer();
 }).then(function () {
   return checkServerRoutes();
@@ -4784,6 +5338,8 @@ checkStopGuards().then(function () {
   return checkBackgroundCollect();
 }).then(function () {
   return checkCollectBanner();
+}).then(function () {
+  return checkNudges();
 }).then(function () {
   return checkCaptureWindow();
 }).then(function () {

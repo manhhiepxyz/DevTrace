@@ -69,9 +69,15 @@ function text(run, repo, args) {
 
 /* `git rev-list --left-right --count @{upstream}...HEAD` in ra "trái\tphải".
    Trái là commit chỉ có ở remote (chưa kéo về), phải là commit chỉ có ở máy
-   (chưa đẩy lên). Nhầm hai cột này là nói ngược hẳn tình hình. */
+   (chưa đẩy lên). Nhầm hai cột này là nói ngược hẳn tình hình.
+
+   Khai thành hằng số vì `app/nudges.js` cũng chạy đúng lệnh này, chỉ khác
+   là song song cho nhiều kho. Để hai chỗ tự viết lấy thì có ngày một chỗ
+   đổi mà chỗ kia không, và hai màn hình nói hai kiểu về cùng một kho. */
+const UPSTREAM_ARGS = ['rev-list', '--left-right', '--count', '@{upstream}...HEAD'];
+
 function aheadBehind(run, repo) {
-  const out = text(run, repo, ['rev-list', '--left-right', '--count', '@{upstream}...HEAD']);
+  const out = text(run, repo, UPSTREAM_ARGS);
   if (out == null) return { upstream: false, ahead: null, behind: null };
   const parts = out.trim().split(/\s+/);
   const behind = Number(parts[0]);
@@ -321,5 +327,6 @@ function isStale(shot, config, now) {
 module.exports = {
   healthFile, collect, snapshot, read, isStale, repoSnapshot,
   scanSecrets, settingsOf, repoList, aheadBehind, stashes, branches, tags, bigFiles,
+  UPSTREAM_ARGS,
   DEFAULT_MAX_REPOS, DEFAULT_MAX_FILE_BYTES, STALE_BRANCH_DAYS, MANY_CHANGES, MANY_STASHES
 };

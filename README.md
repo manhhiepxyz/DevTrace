@@ -139,7 +139,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 753 kiểm tra
+npm test            # chạy 832 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -297,6 +297,63 @@ nhãn ghi *"có thể là bí mật"*, không khẳng định.
 
 Mỗi kho tốn khoảng sáu lệnh git, nên mặc định chỉ quét `sources.git.healthMaxRepos` kho
 (20). Quét cả danh sách là việc phải chọn.
+
+## Nhắc việc trên khay
+
+Bốn thứ đáng **đánh thức** huynh khỏi việc đang làm, chứ không phải bốn mục nữa để đọc khi
+đã mở ứng dụng ra. Danh sách dài không sao; một bong bóng thừa là huynh tắt cả tính năng đi
+— nên mỗi loại phải trả lời được *"chuyện này có gấp tới mức đánh thức không?"*.
+
+| Loại | Nói gì | Nhắc lại |
+| --- | --- | --- |
+| `overdue` | Việc đã quá hạn. Có hạn nghĩa là huynh đã tự hứa một mốc | Không — khoá mang theo ngày |
+| `slot` | Buổi trong thời khoá biểu đã trôi qua mà dấu vết không khớp | Không — khoá mang theo ngày và buổi |
+| `repo` | Kho còn nhiều thay đổi chưa ghi, hoặc có commit trên remote chưa kéo về | Có, thưa (`repoRepeatMinutes`) |
+| `evening` | Tổng kết cuối ngày, sau `eveningHour` | Không — khoá mang theo ngày |
+
+Ba câu **không bao giờ** được nói ra, và mục `[8c]` của bộ kiểm canh đúng ba câu đó:
+
+1. **Buổi `no-evidence` không bao giờ thành lời nhắc.** Ngày mà bộ thu thập không chạy — máy
+   tắt, nguồn bị tắt trong Cài đặt — thì *mọi* buổi đều mang trạng thái đó. Nhắc "buổi sáng
+   8–11:30 trôi qua không dấu vết" lúc ấy là buộc tội huynh về một việc mà chính chương trình
+   không nhìn thấy.
+2. **Ngày không đọc được dấu vết không được gọi là "0 phút".** Một ngày chưa thu thập lần nào
+   và một ngày ngồi chơi đều ra 0 phút, nhưng là hai chuyện khác hẳn nhau.
+3. **Quét kho hỏng không được thành "mọi kho đều sạch".** Không quét được thì không nhắc gì
+   về kho, và nói ra là không quét được.
+
+Hai chỗ gom lại: nhiều việc quá hạn thành **một** lời nhắc, và nhiều kho bẩn cũng thành **một**
+— hai mươi kho bẩn không được sinh ra hai mươi bong bóng.
+
+Cấu hình trong `devtrace.config.json`:
+
+```json
+"nudges": {
+  "enabled": true,
+  "pollMinutes": 5,
+  "repoEveryMinutes": 30,
+  "eveningHour": 21,
+  "repoRepeatMinutes": 360,
+  "kinds": { "overdue": true, "slot": true, "repo": true, "evening": true, "plan": true }
+}
+```
+
+`pollMinutes` là nhịp hỏi những thứ **rẻ**. `repoEveryMinutes` là nhịp **riêng** cho phần quét
+kho mã: nó tốn bốn lệnh git mỗi kho, và hỏi nó mỗi năm phút là tự tay bóp nghẹt ổ đĩa của
+chính mình. Tắt được từng loại một trong `kinds`.
+
+Ba chuyện về cách nó được dựng, vì đọc mã sẽ thấy lạ nếu không biết:
+
+- **Phần quét kho là việc PHẢI CHỌN**, kể cả ở đây. `GET /api/nudges` **không** quét; phải
+  xin rõ bằng `?repos=1`. Đo trên máy này với 53 kho: không quét **201 ms**, có quét
+  **1 862 ms** (20 kho × 4 lệnh git, chạy 16 kho một lúc).
+- **Máy chủ không đứng hình.** Việc đọc lời nhắc chạy trong tiến trình riêng
+  (`app/nudges-run.js`), cùng lối với đường thu thập. Đo lại trong lúc quét: 9 lần hỏi
+  `/api/status` xen vào, chậm nhất **8 ms**, không lần nào hỏng. Trước khi tách tiến trình,
+  đúng hình dạng này đã cho ra 15,2 giây không trả lời nổi một yêu cầu.
+- **Chuyện "đã báo chưa" không nằm trong `data/`.** Nó là chuyện của *máy này* và *khay này*,
+  không phải một sự thật về công việc của huynh. Tệp nhớ nằm ở `%APPDATA%\DevTrace\` (đã đo:
+  ghi được), và xoá nó chỉ làm DevTrace quên đã báo gì — không mất một byte bằng chứng nào.
 
 ## Các nguồn dữ liệu và bằng chứng chúng đóng góp
 
@@ -508,7 +565,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-753 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+832 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra
@@ -522,7 +579,7 @@ vô hại **không** được phép cắn nhầm), gói gửi cho AI không đư
 máy vẫn nguyên bản gốc, hạn lưu trữ chỉ xoá đúng ngày quá cũ, và `stop.js` **không được tắt
 nhầm** — kể cả tình huống tệp pid cũ nằm lại rồi Windows cấp số pid đó cho phần mềm khác.
 
-Ba nhóm mới, và mỗi nhóm kiểm một điều mà lời hứa suông không giữ được:
+Mỗi nhóm dưới đây kiểm một điều mà lời hứa suông không giữ được:
 
 - **Kế hoạch** — việc cố định lặp đúng theo thứ, tích xong hôm nay không tích sẵn tuần sau,
   đối chiếu nói *chưa có dấu vết* chứ **không bao giờ** nói *chưa làm*, tốc độ **ẩn** khi
@@ -556,6 +613,17 @@ Ba nhóm mới, và mỗi nhóm kiểm một điều mà lời hứa suông khô
   khoá đường cập nhật, một kho đọc hụt thì **cả nguồn** là đọc hụt, quét hỏng thì có ghi chú
   nói ra chứ không im lặng chậm gấp bốn, và nhóm thợ giữ **đúng thứ tự** kết quả, không bao
   giờ vượt trần, không bỏ sót mục nào.
+- **Nhắc việc trên khay** — bốn loại, và ba câu chúng **không bao giờ** được nói: buổi
+  `no-evidence` không thành lời nhắc (có phép kiểm riêng chứng minh buổi đó **đúng là** mang
+  trạng thái ấy, để phép kiểm âm không xanh một cách vô nghĩa), ngày không đọc được dấu vết
+  không bị gọi là "0 phút", và quét kho hỏng không thành "mọi kho đều sạch". Kèm: nhiều việc
+  quá hạn và nhiều kho bẩn đều **gom thành một** lời nhắc, chưa qua thời gian ân hạn thì chưa
+  nhắc, và buổi vừa kết thúc **đã** được đối chiếu là bỏ lỡ — tức là nó có đáng nhắc, chỉ là
+  chưa tới lúc. Phía ứng dụng để bàn: hàm chọn lời nhắc **không tự đánh dấu** đã báo (đánh dấu
+  là việc của chỗ hiện bong bóng, nếu không thì lời nhắc biến mất mà không ai từng thấy), đang
+  nhìn DevTrace thì **không** hiện bong bóng **và không** đánh dấu, tệp nhớ hỏng thì coi như
+  chưa báo gì, khoá cũ hơn ba mươi ngày bị quên, và chỗ nhớ ấy chạy **thật** qua tiến trình
+  con (argv → JSON ra stdout) để chứng minh mặc định **không** quét tám chục tiến trình git.
 
 Bài kiểm thử cố tình **không mở cửa sổ nào và không sinh tiến trình nào** — chỗ sinh tiến
 trình là một khe cắm, còn đường ống của tiến trình con thì được gọi thẳng trong chính tiến
@@ -592,6 +660,20 @@ bật ứng dụng lên làm phiền người đang ngồi trước máy.
   nhau: `healthMaxRepos` (mặc định 20) là trần của phần **sức khoẻ kho mã** ở màn Dự án, một
   lượt quét riêng chỉ chạy khi huynh bấm. Còn lượt thu thập thì quét tất cả — trên máy này là
   53 kho — nên nó mới là chỗ tốn thời gian, và cũng là chỗ vừa được sửa.
+- **Nhắc việc chỉ có khi mở DevTrace như ứng dụng để bàn.** `node server.js` không có khay nào
+  để hiện bong bóng, nên chạy bằng dòng lệnh thì bốn lời nhắc ấy không tồn tại — chúng không
+  phải một hàng đợi nằm chờ trong máy chủ.
+- **Lời nhắc chỉ kiểm khi ứng dụng đang mở.** DevTrace không phải dịch vụ chạy nền: tắt nó đi
+  thì không có gì nhắc, và mở lại thì lời nhắc của ngày hôm đó vẫn còn nguyên vì khoá mang
+  theo ngày.
+- **Phần quét kho của lời nhắc cũng có trần 20 kho** (`healthMaxRepos`), và có ghi chú nói ra
+  khi bỏ qua phần còn lại. Nó hỏi git **bốn** câu mỗi kho, không phải sáu — chỉ những gì cần
+  để trả lời "có gì đáng nói ngay không".
+- **Bong bóng khay của Windows hiện ở khay hệ thống, không phải một cửa sổ thông báo hiện đại.**
+  Nó có thể bị Windows ẩn nếu huynh đang bật chế độ tập trung. DevTrace không kiểm tra được
+  điều đó, nên nó không hứa gì về việc bong bóng sẽ hiện.
+- **Chưa có màn Cài đặt cho bốn lời nhắc này.** Bật/tắt và đổi giờ phải sửa thẳng khối
+  `nudges` trong `devtrace.config.json`. Đây là chỗ còn thiếu, không phải chỗ đã xong.
 
 ## Gợi ý cho chính huynh
 

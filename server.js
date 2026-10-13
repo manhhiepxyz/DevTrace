@@ -24,6 +24,7 @@ const R = require('./app/redact');
 const Plans = require('./app/plans');
 const RepoHealth = require('./app/repohealth');
 const Mail = require('./app/mail');
+const Nudges = require('./app/nudges');
 
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT) || 5173;
@@ -332,6 +333,21 @@ async function api(req, res, urlPath, query) {
 
   if (urlPath === '/api/mail/refresh' && req.method === 'POST') {
     return sendJson(res, 200, Mail.snapshot(config));
+  }
+
+  /* ---- Lời nhắc cho khay hệ thống ----
+
+     Chạy trong TIẾN TRÌNH RIÊNG, không phải ngay tại đây. Phần quét kho mã
+     của nó là 80 tiến trình git chạy đồng bộ, và gọi thẳng thì mỗi lần ứng
+     dụng để bàn hỏi "có gì mới không" là máy chủ đứng hình chừng ấy — đúng
+     cái lỗi đã đo được ở đường thu thập, khi một `GET /api/status` vài
+     mili giây bị trả lời sau 15,2 giây.
+
+     `?repos=1` mới quét kho. Mặc định KHÔNG quét: đây là tuyến bị hỏi vài
+     phút một lần, còn quét kho tốn bốn lệnh git mỗi kho. */
+  if (urlPath === '/api/nudges' && req.method === 'GET') {
+    const result = await Nudges.spawnNudges({ repos: query.get('repos') === '1' });
+    return sendJson(res, result.ok ? 200 : 500, result);
   }
 
   /* ---- Duyệt thư mục để chọn dự án ----
