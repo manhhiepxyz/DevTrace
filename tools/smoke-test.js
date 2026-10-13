@@ -1155,6 +1155,8 @@ const requiredClasses = ['card', 'stat', 'badge', 'btn', 'table', 'question', 't
   'inbox-capture', 'inbox-list', 'inbox-item', 'inbox-text', 'inbox-actions', 'inbox-empty',
   'capture-body', 'capture-form', 'capture-input', 'capture-foot', 'capture-hint',
   'capture-msg', 'capture-bad',
+  // Dải "đang thu dấu vết" — nằm trên mọi màn hình trong lúc thu thập.
+  'collect-bar', 'collect-bar-dot', 'collect-bar-text',
   'board', 'board-col', 'task', 'task-done', 'sprint-band', 'mail-list', 'mail-row', 'repo-chip'];
 const missingClasses = requiredClasses.filter((name) => cssSrc.indexOf('.' + name) === -1);
 check('bảng kiểu có đủ lớp giao diện dùng tới', missingClasses.length === 0, missingClasses);
@@ -3772,6 +3774,8 @@ function makeDom() {
 function bootApp(apiResponses, options) {
   const opts = options || {};
   const dom = makeDom();
+  const timers = [];
+  const cleared = [];
   const sandbox = { console: console, Promise, Error, JSON, Math, Date, Object, Array, String, Number, isFinite, RegExp, Set, Map, encodeURIComponent, decodeURIComponent };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
@@ -3779,8 +3783,23 @@ function bootApp(apiResponses, options) {
   sandbox.location = dom.window.location;
   sandbox.getComputedStyle = function () { return { getPropertyValue: function () { return '#123456'; } }; };
   sandbox.localStorage = { getItem: function () { return null; }, setItem: function () {} };
-  sandbox.setTimeout = setTimeout;
+  /* `setTimeout` thật, nhưng KHÔNG giữ tiến trình sống: một thông báo nổi tự
+     tắt sau 5,2 giây, và bộ kiểm thử không việc gì phải ngồi chờ nó tắt. */
+  sandbox.setTimeout = function (fn, ms) {
+    const timer = setTimeout(fn, ms);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return timer;
+  };
   sandbox.clearTimeout = clearTimeout;
+  /* `setInterval` thì GIẢ: ghi lại nhịp và hàm, không hẹn giờ thật. Vòng
+     theo dõi lượt thu thập chạy lại mỗi 1,5 giây cho tới khi xong việc —
+     hẹn thật thì bộ kiểm thử không bao giờ kết thúc. Bài kiểm tự gọi hàm
+     đó ra khi cần kiểm nhịp ấy. */
+  sandbox.setInterval = function (fn, ms) {
+    timers.push({ fn: fn, ms: ms, id: timers.length + 1 });
+    return timers.length;
+  };
+  sandbox.clearInterval = function (id) { cleared.push(id); };
   sandbox.confirm = function () { return false; };
   sandbox.addEventListener = function () {};
   sandbox.scrollTo = function () {};
@@ -3797,7 +3816,7 @@ function bootApp(apiResponses, options) {
   ['web/charts.js', 'web/views.js', 'web/app.js'].forEach(function (file) {
     vm2.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), sandbox, { filename: file });
   });
-  return { sandbox, dom };
+  return { sandbox, dom, timers, cleared };
 }
 
 const apiStub = {};
@@ -4280,6 +4299,229 @@ function checkServerRoutes() {
   });
 }
 
+/* =====================================================================
+   [16b] Thu thập ở hậu trường — không khoá máy chủ
+
+   Canh ĐÚNG thứ vừa được sửa. Trước: `POST /api/collect` chạy cả đường ống
+   đồng bộ ngay trên luồng của máy chủ, đo được 15,2 giây không trả lời nổi
+   một yêu cầu nào — mở ứng dụng lên là màn hình trắng đúng bằng chừng ấy.
+
+   Bài kiểm này KHÔNG sinh tiến trình nào và không mở mạng:
+     - chỗ sinh tiến trình là một khe cắm (`seams.spawn`), đúng lối
+       `opts.kill` của stop.js và `opts.runGit` của git.js;
+     - tiến trình con thật thì gọi thẳng `main()` với một tên nguồn không
+       tồn tại, nên nó đi hết đường argv → Collect.run → JSON mà không chạy
+       git, không đọc tệp, không gọi mạng (nguồn lạ rơi vào nhánh "đang tắt").
+   ===================================================================== */
+
+function checkBackgroundCollect() {
+  section('[16b] Thu thập ở hậu trường, không khoá máy chủ');
+
+  const bgConfig = JSON.parse(JSON.stringify(config));
+  bgConfig.dataDir = path.join(TEST_DIR, 'hau-truong');
+  fs.mkdirSync(bgConfig.dataDir, { recursive: true });
+
+  /* --- Phần 1: máy chủ không còn gọi đường đồng bộ ------------------- */
+
+  /* Đường đồng bộ `Collect.run` vẫn là đường chính của bộ kiểm thử và của
+     tệp lệnh — nó chỉ KHÔNG được gọi từ máy chủ nữa. */
+  check('máy chủ không gọi thẳng đường thu thập đồng bộ',
+    serverSrc.indexOf('Collect.run(config') === -1);
+  check('máy chủ gọi đường chạy ở hậu trường',
+    serverSrc.indexOf('Collect.runDetached') !== -1);
+  check('máy chủ phân biệt "đang bận" với "hỏng"',
+    serverSrc.indexOf('result.ok ? 200 : (result.busy ? 409 : 500)') !== -1);
+
+  /* --- Phần 2: chạy THẬT đường ống của tiến trình con ---------------- */
+
+  const CollectRun = require('../app/collect-run');
+  const realLoad = C.load;
+  const realWrite = process.stdout.write;
+  const written = [];
+
+  /* `console.log` cũng đi qua `process.stdout.write`, nên trong khoảng thay
+     tạm dưới đây tuyệt đối không được gọi `check()` — nếu không thì dòng
+     "ok/FAIL" lọt vào chuỗi JSON đang chờ đọc. */
+  function runChild(rawArg) {
+    written.length = 0;
+    C.load = () => bgConfig;
+    process.stdout.write = function (text) { written.push(String(text)); return true; };
+    let code = null;
+    let threw = null;
+    try { code = CollectRun.main(['node', 'collect-run.js', rawArg]); } catch (error) { threw = error.message; }
+    process.stdout.write = realWrite;
+    C.load = realLoad;
+    let parsed = null;
+    try { parsed = JSON.parse(written.join('')); } catch (error) { parsed = null; }
+    return { code: code, threw: threw, parsed: parsed, pieces: written.length };
+  }
+
+  const child = runChild('{"sources":["khong-co-nguon-nay"]}');
+  check('tiến trình con đi hết đường rồi thoát sạch',
+    child.threw === null && child.code === 0, child.threw || child.code);
+  check('tiến trình con in ra ĐÚNG MỘT đối tượng JSON, không kèm chữ nào khác',
+    child.pieces === 1 && !!child.parsed && child.parsed.ok === true, written.length);
+  check('bản tổng kết đi qua nguyên vẹn',
+    !!(child.parsed && child.parsed.summary && child.parsed.summary.sources['khong-co-nguon-nay']
+      && child.parsed.summary.sources['khong-co-nguon-nay'].ok === true && child.parsed.summary.total === 0),
+    child.parsed && child.parsed.summary);
+
+  /* Tham số hỏng phải NÓI RA. Rơi về mặc định ở đây nghĩa là một lần gõ
+     sai biến thành "chạy cả bảy nguồn" — chạy git trên hai mươi tư kho vì
+     một dấu ngoặc lệch. */
+  const badArg = runChild('{khong-phai-json');
+  check('tham số hỏng thì từ chối, KHÔNG chạy bừa cả bảy nguồn',
+    badArg.code === 1 && !!badArg.parsed && badArg.parsed.ok === false
+      && /không đọc được/i.test(badArg.parsed.error), badArg.parsed);
+  check('tham số hỏng thì không trả về bản tổng kết nào',
+    !(badArg.parsed && badArg.parsed.summary));
+
+  /* --- Phần 3: lớp bọc của máy chủ, qua khe cắm giả ------------------ */
+
+  const spawned = [];
+  let gate = null;
+
+  function fakeSpawn(options) {
+    spawned.push(options);
+    let open;
+    const promise = new Promise((resolve) => { open = resolve; });
+    gate = { promise: promise, open: open };
+    return promise;
+  }
+
+  function neverSpawns(out) {
+    return function () { return out; };
+  }
+
+  check('chưa chạy gì thì không có lượt nào đang thu thập', Collect.collecting() === null);
+  check('cùng các nguồn, khác thứ tự, vẫn là cùng một yêu cầu',
+    Collect.runKey({ sources: ['git', 'codex'] }) === Collect.runKey({ sources: ['codex', 'git'] }),
+    [Collect.runKey({ sources: ['git', 'codex'] }), Collect.runKey({ sources: ['codex', 'git'] })]);
+  check('không nêu nguồn nào nghĩa là cả bảy bộ thu thập',
+    JSON.parse(Collect.runKey({})).sources.length === Object.keys(Collect.COLLECTORS).length,
+    Object.keys(Collect.COLLECTORS).length);
+
+  const first = Collect.runDetached(bgConfig, { sources: ['codex'] }, { spawn: fakeSpawn });
+  check('bắt đầu là sinh đúng MỘT tiến trình con', spawned.length === 1, spawned.length);
+  check('máy chủ biết là đang thu thập, và biết đang thu nguồn nào',
+    !!Collect.collecting() && Collect.collecting().sources.length === 1
+      && Collect.collecting().sources[0] === 'codex', Collect.collecting());
+
+  const second = Collect.runDetached(bgConfig, { sources: ['codex'] }, { spawn: fakeSpawn });
+  check('yêu cầu CÙNG nguồn thì nhập vào lượt đang chạy, không sinh thêm tiến trình',
+    spawned.length === 1, spawned.length);
+
+  /* Trạng thái phải sống trong health.json để tuyến /api/status đọc được:
+     dải báo trên giao diện dựa vào đúng chỗ này. */
+  E.writeHealth(bgConfig, { codex: { label: 'Codex', lastRun: Date.now(), ms: 1, events: 0, ok: true, notes: [] } });
+
+  return Collect.runDetached(bgConfig, { sources: ['git'] }, { spawn: fakeSpawn }).then(function (busy) {
+    check('yêu cầu KHÁC nguồn thì bị từ chối, không im lặng trả kết quả của lượt kia',
+      busy.ok === false && busy.busy === true, busy);
+    check('bị từ chối thì cũng không sinh thêm tiến trình', spawned.length === 1, spawned.length);
+
+    C.load = () => bgConfig;
+    return callApi('GET', '/api/status');
+  }).then(function (res) {
+    check('/api/status nói ra là đang thu thập, kèm cả tên nguồn',
+      res.status === 200 && !!res.body.status.collecting
+        && res.body.status.collecting.sources[0] === 'codex', res.body.status.collecting);
+    return callApi('POST', '/api/reset', {}, {});
+  }).then(function (res) {
+    check('xoá sạch giữa lúc thu thập thì bị chặn, không xoá nửa vời',
+      res.status === 409 && /Đang thu thập/.test(res.body.error), res);
+    check('xoá bị chặn thì KHÔNG xoá gì cả', fs.existsSync(E.healthPath(bgConfig)));
+
+    gate.open({ ok: true, summary: { total: 3, ms: 12, sources: {} } });
+    return Promise.all([first, second]);
+  }).then(function (outs) {
+    check('lượt đầu trả về nguyên bản tổng kết của tiến trình con',
+      outs[0].ok === true && outs[0].summary.total === 3, outs[0]);
+    check('trạng thái đi kèm được ĐỌC SAU khi con ghi xong, nên nói đúng là đã thôi thu thập',
+      !!outs[0].status && outs[0].status.collecting === null, outs[0].status && outs[0].status.collecting);
+    check('lượt nhập vào tự khai nó là lượt nhập, không nhận công của mình',
+      outs[1].ok === true && outs[1].joined === true, outs[1]);
+    check('thu xong thì máy chủ thôi báo đang thu thập', Collect.collecting() === null);
+    return callApi('POST', '/api/reset', {}, {});
+  }).then(function (res) {
+    check('thu xong rồi thì xoá sạch chạy lại được',
+      res.status === 200 && res.body.cleared === true, res);
+    check('xoá sạch lần này thì có xoá thật', !fs.existsSync(E.healthPath(bgConfig)));
+
+    /* Tiến trình con hỏng: `spawnCollect` nuốt lỗi và trả `{ ok:false }`,
+       nhưng nếu chính việc sinh tiến trình ném ra thì lớp bọc cũng phải
+       biến nó thành cùng một hình dạng — chỗ gọi chỉ phải xử lý một kiểu. */
+    return Collect.runDetached(bgConfig, { sources: ['codex'] },
+      { spawn: neverSpawns(Promise.resolve({ ok: false, error: 'Không chạy được lượt thu thập: hỏng' })) });
+  }).then(function (failed) {
+    check('tiến trình con hỏng thì trả lỗi chứ không ném ra ngoài',
+      failed.ok === false && /Không chạy được/.test(failed.error), failed);
+    check('hỏng thì vẫn mở khoá cho lượt sau', Collect.collecting() === null);
+    return Collect.runDetached(bgConfig, { sources: ['codex'] },
+      { spawn: neverSpawns(Promise.reject(new Error('EACCES'))) });
+  }).then(function (threwSpawn) {
+    check('sinh tiến trình ném lỗi thì cũng thành { ok: false }',
+      threwSpawn.ok === false && /EACCES/.test(threwSpawn.error), threwSpawn);
+    check('ném lỗi cũng mở khoá', Collect.collecting() === null);
+    C.load = realLoad;
+  }, function (error) {
+    C.load = realLoad;
+    throw error;
+  });
+}
+
+/* ---- Dải báo "đang thu dấu vết" --------------------------------------
+   Chạy THẬT trong DOM giả. Điều đáng canh không phải dải báo có hiện hay
+   không, mà là nó có NÓI RA rằng những con số bên dưới là của lần thu
+   trước. Một bảng ghi "0 sự kiện hôm nay" mà không kèm câu đó bị đọc thành
+   "hôm nay chưa làm gì" — đúng kiểu sai mà cả dự án này cấm. */
+
+function checkCollectBanner() {
+  section('[16c] Dải báo đang thu dấu vết');
+
+  const base = apiStub['/api/status'];
+  const busyStub = Object.assign({}, apiStub);
+  busyStub['/api/status'] = {
+    status: Object.assign({}, base.status, {
+      updatedAt: Date.now() - 300000,
+      collecting: { startedAt: Date.now() - 2000, ms: 2000, sources: ['codex', 'git'] }
+    }),
+    config: base.config
+  };
+
+  const busy = bootApp(busyStub);
+  return busy.sandbox.DevTrace.boot().then(function () {
+    const html = busy.dom.nodes['#view'].innerHTML;
+    check('đang thu thập thì hiện dải báo', html.indexOf('class="collect-bar"') !== -1, html.slice(0, 160));
+    check('dải báo nói thẳng số liệu đang hiện là của lần thu TRƯỚC',
+      html.indexOf('Số liệu bên dưới là của lần thu trước') !== -1);
+    check('dải báo nằm TRÊN nội dung, không phải cuộn xuống mới thấy',
+      html.indexOf('collect-bar') < html.indexOf('Huynh đã làm gì'));
+    check('đang thu thập thì nút thu thập bị khoá và đổi chữ',
+      busy.dom.nodes['#collectBtn'].disabled === true
+        && busy.dom.nodes['#collectBtn'].textContent === 'Đang thu thập…',
+      busy.dom.nodes['#collectBtn'].textContent);
+    check('dải báo không lộ undefined ra giao diện', html.indexOf('undefined') === -1);
+    check('có đúng một nhịp theo dõi được hẹn, và là 1,5 giây',
+      busy.timers.length === 1 && busy.timers[0].ms === 1500, busy.timers.map((t) => t.ms));
+
+    /* Nhịp sau trả lời là đã xong. Dải phải biến mất và nhịp phải tự dừng —
+       một nhịp hỏi mãi không ai tắt là thứ chạy nền suốt ngày. */
+    busyStub['/api/status'] = {
+      status: Object.assign({}, base.status, { updatedAt: Date.now(), collecting: null }),
+      config: base.config
+    };
+    busy.timers[0].fn();
+    return settle().then(() => settle()).then(() => {
+      check('thu xong thì nhịp theo dõi tự dừng', busy.cleared.length === 1, busy.cleared);
+      check('thu xong thì dải báo biến mất',
+        busy.dom.nodes['#view'].innerHTML.indexOf('collect-bar') === -1);
+      check('thu xong thì nút thu thập mở lại',
+        busy.dom.nodes['#collectBtn'].disabled === false);
+    });
+  });
+}
+
 /* Phần tắt-máy-chủ của mục [12] và phần bật-máy-chủ của app Electron phải
    chạy trước: chúng bất đồng bộ, và cả tệp này là CommonJS nên không có await
    ở cấp cao nhất. Chạy chúng ở đây để mọi kiểm tra bất đồng bộ nằm chung một
@@ -4288,6 +4530,10 @@ checkStopGuards().then(function () {
   return checkEnsureServer();
 }).then(function () {
   return checkServerRoutes();
+}).then(function () {
+  return checkBackgroundCollect();
+}).then(function () {
+  return checkCollectBanner();
 }).then(function () {
   return checkCaptureWindow();
 }).then(function () {

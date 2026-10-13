@@ -183,10 +183,20 @@ async function api(req, res, urlPath, query) {
     return sendJson(res, 200, { app: 'devtrace', status: Collect.status(config), config: Report.publicConfig(config) });
   }
 
+  /* Thu thập chạy trong TIẾN TRÌNH RIÊNG, không phải ngay tại đây.
+
+     Gọi thẳng `Collect.run` ở chỗ này là khoá cả máy chủ suốt lượt thu
+     thập: đo được 15,2 giây không trả lời nổi một yêu cầu nào. Mở ứng dụng
+     lên là màn hình trắng đúng bằng chừng ấy. Xem app/collect-run.js.
+
+     Đổi lại, tuyến này chờ lâu hơn — nhưng chờ ở đây là chờ của MỘT yêu
+     cầu, không phải của cả máy chủ. */
   if (urlPath === '/api/collect' && req.method === 'POST') {
     const body = await readBody(req);
-    const summary = Collect.run(config, { sources: body.sources, rebuild: !!body.rebuild });
-    return sendJson(res, 200, { summary, status: Collect.status(config) });
+    const result = await Collect.runDetached(config, { sources: body.sources, rebuild: !!body.rebuild });
+    // 409 khi đang có một lượt KHÁC chạy: yêu cầu này không được đáp, và
+    // im lặng trả về bản tổng kết của lượt kia là nói dối.
+    return sendJson(res, result.ok ? 200 : (result.busy ? 409 : 500), result);
   }
 
   if (urlPath === '/api/days' && req.method === 'GET') {
@@ -389,7 +399,16 @@ async function api(req, res, urlPath, query) {
     return sendJson(res, 200, redacted.value);
   }
 
+  /* Xoá sạch kho — nhưng KHÔNG trong lúc một lượt thu thập đang chạy.
+
+     Tiến trình con đang ghi vào chính những tệp sắp bị xoá, và nó ghi bằng
+     cách thay cả tệp ngày. Xen vào giữa chừng thì kết quả là một kho nửa
+     mới nửa cũ, không cách nào dựng lại — mà đây lại đúng là thao tác
+     người ta bấm khi muốn "làm lại từ đầu". */
   if (urlPath === '/api/reset' && req.method === 'POST') {
+    if (Collect.collecting()) {
+      return sendJson(res, 409, { error: 'Đang thu thập dấu vết — đợi lượt này xong rồi xoá.' });
+    }
     Collect.clearCollected(config);
     return sendJson(res, 200, { cleared: true });
   }

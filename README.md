@@ -98,6 +98,20 @@ node server.js
 
 Rồi mở http://localhost:5173 và bấm **Thu thập dấu vết**.
 
+Một lượt thu thập chạy trong **tiến trình riêng**, không phải ngay trên luồng của máy chủ.
+Trước đây thì ngược lại, và cái giá đo được là **15,2 giây** máy chủ không trả lời nổi một
+yêu cầu nào — mở ứng dụng lên là màn hình trắng đúng bằng chừng ấy, vì cả đường ống đọc git,
+đọc tệp, đọc lịch sử trình duyệt đều là lệnh đồng bộ. Nay trong lúc thu thập, giao diện vẫn
+chạy: nó hiện **số liệu của lần thu trước** kèm một dải báo nói thẳng điều đó, và tự vẽ lại
+khi xong. Đo lại trên chính máy này với 24 kho git: lượt thu thập vẫn mất 18 giây, nhưng
+trong suốt 18 giây đó máy chủ trả lời **13 132 yêu cầu liên tiếp, chậm nhất 121 ms**, và lượt
+nào cũng thấy trạng thái "đang thu thập" — thay cho một lần đứng hình 15 197 ms.
+
+> **Đang thu thập thì chưa xoá sạch được.** Nút xoá sạch trong màn Cài đặt trả về lỗi cho tới
+> khi lượt thu thập xong. Tiến trình con đang ghi vào chính những tệp sắp bị xoá, và nó ghi
+> bằng cách thay cả tệp ngày — xen vào giữa chừng thì kết quả là một kho **nửa mới nửa cũ**,
+> không cách nào dựng lại.
+
 Không cần `npm install`. Không cần mạng. Chỉ cần Node 22 trở lên (dùng `node:sqlite`
 có sẵn để đọc lịch sử trình duyệt).
 
@@ -108,7 +122,7 @@ có sẵn để đọc lịch sử trình duyệt).
 npm start           # tương đương node server.js
 npm desktop         # mở app Electron (cần đã cài electron)
 npm stop            # tắt máy chủ ở chế độ nền (thay cho stop-devtrace.cmd)
-npm test            # chạy 692 kiểm tra
+npm test            # chạy 730 kiểm tra
 npm run collect     # thu thập rồi in tóm tắt ra terminal, không cần mở trình duyệt
 npm run repos       # dò các kho git trên máy rồi in ra khối dán vào cấu hình
 npm run icon        # vẽ lại biểu tượng devtrace.ico
@@ -477,7 +491,7 @@ Tự xoá dữ liệu của huynh là việc huynh phải nói rõ mình muốn 
 node tools/smoke-test.js
 ```
 
-692 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
+730 kiểm tra, chạy trong vài giây, không cần trình duyệt, **không cần mạng, và không mở một
 kết nối nào**. Bao gồm:
 tiện ích thời gian, kho sự kiện, cấu hình, đối chiếu, tổng hợp, tầng AI, từng bộ thu thập
 (có cả tệp rollout giả), bộ điều phối **cùng chốt chặn chống xoá dữ liệu** (nguồn suy ra
@@ -509,13 +523,29 @@ Ba nhóm mới, và mỗi nhóm kiểm một điều mà lời hứa suông khô
   một lần** vào `/api/plans/inbox` với chữ đã gộp khoảng trắng rồi mới xoá ô và đóng, máy chủ
   chết hoặc từ chối thì **chữ còn nguyên, ô nhập mở lại**, và `Esc` đóng mà **không** xoá gì.
   Kèm một phép soi mã nguồn: chỗ xoá ô nhập phải nằm **trước** nhánh báo lỗi.
+- **Thu thập ở hậu trường** — đường ống của tiến trình con được gọi **thật** (argv → JSON ra
+  stdout) với một tên nguồn không tồn tại, nên nó đi hết đường mà không chạy git, không đọc
+  tệp, không gọi mạng; tham số hỏng phải **từ chối** chứ không được rơi về mặc định rồi chạy
+  cả bảy nguồn. Chỗ sinh tiến trình là một **khe cắm**, nên lớp bọc của máy chủ cũng được thử
+  hết: yêu cầu cùng nguồn thì **nhập** vào lượt đang chạy, yêu cầu khác nguồn thì bị **từ
+  chối** kèm mã 409, `/api/status` nói ra là đang thu thập, và `/api/reset` bị chặn giữa
+  chừng — xoá sạch trong lúc tiến trình con đang ghi là để lại một kho nửa mới nửa cũ. Kèm
+  một phép soi mã nguồn: máy chủ **không** được gọi thẳng đường thu thập đồng bộ nữa.
+- **Dải báo "đang thu dấu vết"** — chạy trong DOM giả: dải phải nằm **trên** nội dung và phải
+  nói thẳng rằng số liệu bên dưới là của **lần thu trước**, nút thu thập bị khoá, có **đúng
+  một** nhịp theo dõi 1,5 giây, và khi xong thì nhịp **tự dừng** và dải biến mất.
 
-Bài kiểm thử cố tình **không mở cửa sổ nào và không chạy tiến trình nào** — nó soi phần
-suy nghĩ của bộ khởi động và chạy giao diện trong DOM giả, chứ không bật ứng dụng lên làm
-phiền người đang ngồi trước máy.
+Bài kiểm thử cố tình **không mở cửa sổ nào và không sinh tiến trình nào** — chỗ sinh tiến
+trình là một khe cắm, còn đường ống của tiến trình con thì được gọi thẳng trong chính tiến
+trình này. Nó soi phần suy nghĩ của bộ khởi động và chạy giao diện trong DOM giả, chứ không
+bật ứng dụng lên làm phiền người đang ngồi trước máy.
 
 ## Giới hạn thật
 
+- **Trong lúc thu thập, màn hình đang hiện số liệu của lần thu TRƯỚC.** Đó là lựa chọn có
+  chủ ý: dữ liệu cũ không sai, nó chỉ cũ, và mười tám giây nhìn màn hình trống mới là thứ vừa
+  được sửa. Nhưng nó phải **nói ra**, nên có dải báo kèm mốc thời gian của lần thu trước —
+  không có dải đó thì một bảng ghi "0 sự kiện hôm nay" bị đọc thành "hôm nay chưa làm gì".
 - **Chỉ chạy trên Windows** ở phiên bản này (đường dẫn Chrome/Edge, PSReadLine, VS Code).
 - **Lịch sử chỉ có từ lúc cài.** Codex, Git, Trình duyệt, VS Code có dữ liệu quá khứ; Terminal
   và Tệp tin thì không.

@@ -204,6 +204,38 @@ h1, h2, h3, h4 { font-family: var(--font-serif); font-weight: 600; letter-spacin
 .view { padding: 20px 22px 60px; max-width: 1320px; width: 100%; }
 .loading { color: var(--muted); padding: 40px; text-align: center; font-family: var(--font-serif); }
 
+/* ---- Dải "đang thu dấu vết" ----
+
+   Nằm trên cùng vùng nội dung, ở MỌI màn hình, vì lượt thu thập ảnh hưởng
+   tới mọi con số trên mọi màn hình. Viền trái dày để mắt bắt được ngay cả
+   khi đang đọc dở một bảng — dải này không phải trang trí, nó là câu nói
+   "những số bên dưới chưa phải của hiện tại". */
+
+.collect-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 16px; padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--indigo);
+  border-radius: var(--radius-sm);
+  background: var(--tint);
+  color: var(--ink-soft);
+  font-size: 13px; line-height: 1.45;
+}
+.collect-bar strong { color: var(--ink); }
+.collect-bar-text { min-width: 0; }
+.collect-bar-dot {
+  flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--indigo);
+  animation: collect-pulse 1.1s ease-in-out infinite;
+}
+@keyframes collect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* Nhấp nháy là thứ gây khó chịu thật với người nhạy cảm với chuyển động.
+   Dải này vẫn đọc được khi đứng yên — chữ mới là phần mang tin. */
+@media (prefers-reduced-motion: reduce) {
+  .collect-bar-dot { animation: none; }
+}
+
 /* ---- Khối và thẻ ---- */
 
 .card {

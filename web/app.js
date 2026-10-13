@@ -31,7 +31,11 @@
        vứt đi, nên nguồn lỗi và thông báo xoá dữ liệu cũ không ai thấy. */
     lastCollect: null,
     /* Số điều đáng lưu ý của màn đang xem, để gắn huy hiệu lên thanh bên. */
-    warningCount: 0
+    warningCount: 0,
+    /* Lượt thu thập đang chạy ở hậu trường, do máy chủ báo. Khác null nghĩa
+       là số liệu đang hiện KHÔNG phải của hiện tại mà của lần thu trước —
+       xem collectBar() ngay dưới. */
+    collecting: null
   };
 
   /* ---- Tiện ích ---- */
@@ -210,6 +214,63 @@
       (status.latest ? '<span class="badge">mới nhất ' + status.latest.slice(5) + '</span>' : '');
   }
 
+  /* ---- Nói ra khi dấu vết đang được thu thập --------------------------
+
+     Lượt thu thập đầu tiên được bật ngay lúc mở ứng dụng, và nó chạy trong
+     một tiến trình riêng nên trang này mở ra tức thì — nhưng số liệu nó
+     đang đọc là của LẦN THU TRƯỚC. Nói ra điều đó là BẮT BUỘC, không phải
+     trang trí: một bảng ghi "0 sự kiện hôm nay" mà không kèm câu nào sẽ bị
+     đọc thành "hôm nay chưa làm gì", đúng kiểu sai mà cả dự án này cấm.
+
+     Chọn hiện số liệu cũ kèm lời cảnh báo thay vì để trống màn hình: dữ
+     liệu cũ không sai, nó chỉ cũ — và mười lăm giây nhìn màn hình trống là
+     đúng thứ vừa được sửa. */
+  var watchTimer = null;
+
+  function stopWatching() {
+    if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+  }
+
+  /* Hỏi lại máy chủ cho tới khi lượt thu thập xong, rồi vẽ lại một lần.
+     Không vẽ lại giữa chừng: mỗi lần vẽ là #view dựng lại từ đầu, nên cứ
+     1,5 giây lại vẽ là cuộn trang và ô đang mở nhảy liên tục. */
+  function watchCollect() {
+    if (!state.collecting) { stopWatching(); return; }
+    if (watchTimer) return;
+    watchTimer = setInterval(function () {
+      api('/api/status').then(function (out) {
+        state.lastStatus = out.status;
+        state.collecting = out.status.collecting;
+        renderCollectButton();
+        if (state.collecting) return;
+        stopWatching();
+        toast('Đã thu thập xong — số liệu vừa được cập nhật.', 'good');
+        refresh();
+      }).catch(function () { /* máy chủ chưa trả lời: nhịp sau thử lại */ });
+    }, 1500);
+  }
+
+  function collectBar() {
+    if (!state.collecting) return '';
+    var since = state.lastStatus && state.lastStatus.updatedAt;
+    var when = (since && global.Views && global.Views.fmtTime) ? global.Views.fmtTime(since) : '';
+    return '<div class="collect-bar" role="status">' +
+      '<span class="collect-bar-dot" aria-hidden="true"></span>' +
+      '<span class="collect-bar-text"><strong>Đang thu dấu vết…</strong> ' +
+      'Số liệu bên dưới là của lần thu trước' + (when ? ', lúc ' + esc(when) : '') +
+      '. Vài giây nữa màn hình tự cập nhật.</span></div>';
+  }
+
+  /* Nút thu thập nằm ở thanh bên (index.html), không phải do render() dựng,
+     nên nó phải được cập nhật riêng — nếu không thì lúc lượt thu thập đầu
+     tiên đang chạy, nút vẫn mời bấm dù bấm cũng không được gì. */
+  function renderCollectButton() {
+    var button = $('#collectBtn');
+    if (!button) return;
+    button.disabled = !!state.collecting;
+    button.textContent = state.collecting ? 'Đang thu thập…' : 'Thu thập dấu vết';
+  }
+
   function render() {
     var view = global.Views[state.route];
     var ctx = { state: state, data: lastData, colors: palette() };
@@ -236,20 +297,22 @@
        màn hình sẽ đọc phải trường không tồn tại và vỡ — đúng lỗi đã xảy ra
        ở lần chạy đầu. Thà hiện chỗ chờ còn hơn hiện lỗi. */
     if (lastDataRoute !== state.route) {
-      $('#view').innerHTML = '<div class="loading">Đang đọc dấu vết…</div>';
+      $('#view').innerHTML = collectBar() + '<div class="loading">Đang đọc dấu vết…</div>';
       renderNav();
       renderStatusChips(state.lastStatus);
+      renderCollectButton();
       return;
     }
 
     try {
-      $('#view').innerHTML = view.render(ctx);
+      $('#view').innerHTML = collectBar() + view.render(ctx);
     } catch (error) {
-      $('#view').innerHTML = '<div class="card"><h2>Không dựng được màn hình</h2><p class="mono">' + esc(error && error.message) + '</p></div>';
+      $('#view').innerHTML = collectBar() + '<div class="card"><h2>Không dựng được màn hình</h2><p class="mono">' + esc(error && error.message) + '</p></div>';
       throw error;
     }
     renderNav();
     renderStatusChips(state.lastStatus);
+    renderCollectButton();
   }
 
   function refresh(keepFocus) {
@@ -265,8 +328,14 @@
     function finish(data) {
       lastData = data;
       lastDataRoute = state.route;
-      if (data.status) state.lastStatus = data.status;
+      if (data.status) {
+        state.lastStatus = data.status;
+        state.collecting = data.status.collecting || null;
+      }
       render();
+      /* Đặt sau render(): lần vẽ đầu tiên phải đã có dải cảnh báo, nếu không
+         thì màn hình nháy một cái "như thật" rồi mới nói ra là số liệu cũ. */
+      watchCollect();
     }
   }
 
@@ -1184,12 +1253,17 @@
         notes: summary.notes || [],
         retention: summary.retention || null
       };
+      /* `joined` nghĩa là bấm trong lúc một lượt CÙNG yêu cầu đang chạy, và
+         kết quả này là của lượt đó. Nói ra, vì "thu xong trong 3000ms" khi
+         thật ra vừa chờ một lượt mười lăm giây là con số sai. */
+      var tail = out.joined ? ' (nhập vào lượt đang chạy)' : '';
       if (failed.length) {
-        toast('Đã thu ' + summary.total + ' sự kiện, nhưng ' + failed.length + ' nguồn báo lỗi: ' + failed.join(', ') + '.', 'bad');
+        toast('Đã thu ' + summary.total + ' sự kiện, nhưng ' + failed.length + ' nguồn báo lỗi: ' + failed.join(', ') + '.' + tail, 'bad');
       } else {
-        toast('Đã thu ' + summary.total + ' sự kiện trong ' + summary.ms + 'ms.', 'good');
+        toast('Đã thu ' + summary.total + ' sự kiện trong ' + summary.ms + 'ms.' + tail, 'good');
       }
       state.lastStatus = out.status;
+      state.collecting = (out.status && out.status.collecting) || null;
       return api('/api/status').then(function (fresh) {
         state.lastStatus = fresh.status;
         refresh();
